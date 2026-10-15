@@ -8,17 +8,27 @@ import pandas as pd
 import yfinance as yf
 
 TICKER = "MNQ=F"
-TZ = "America/New_York"
+TZ = "Europe/Zagreb"
+CACHE_TZ = "America/New_York"  # stari cache je bio u NY vremenu
 CACHE = Path(__file__).with_name("mnq_5m.csv")
 OHLCV = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+
+
+def _to_zagreb(df: pd.DataFrame) -> pd.DataFrame:
+    """Sve timestampove normaliziraj u naive Europe/Zagreb."""
+    if df.index.tz is None:
+        df = df.copy()
+        df.index = df.index.tz_localize(CACHE_TZ, ambiguous="infer").tz_convert(TZ).tz_localize(None)
+    else:
+        df.index = df.index.tz_convert(TZ).tz_localize(None)
+    return df
 
 
 def fetch_5m(ticker: str = TICKER, period: str = "60d") -> pd.DataFrame:
     df = yf.download(ticker, interval="5m", period=period, progress=False, multi_level_index=False)
     if df.empty:
         raise RuntimeError("yfinance nije vratio podatke")
-    if df.index.tz is not None:  # naive New York vrijeme, lakše za crtanje
-        df.index = df.index.tz_convert(TZ).tz_localize(None)
+    df = _to_zagreb(df)
     df.index.name = "Time"
     return df[list(OHLCV)].dropna()
 
@@ -27,6 +37,8 @@ def load_5m() -> pd.DataFrame:
     """Povuče svježe podatke i spoji ih s cacheom, pa se istorija vremenom produžuje iznad 60 dana.
     Ako Yahoo ne radi, koristi se samo cache."""
     old = pd.read_csv(CACHE, index_col=0, parse_dates=True) if CACHE.exists() else None
+    if old is not None:
+        old = _to_zagreb(old)
     try:
         new = fetch_5m()
     except Exception as e:

@@ -16,7 +16,13 @@ from zones import get_zones
 
 GREEN, RED, AMBER = "#26a69a", "#ef5350", "#ffc107"
 SWING_N = {"5min": 6, "1h": 3}  # veći prozor na 5m da oznake ne zatrpaju graf
-FMT = "%Y-%m-%d %H:%M:%S"
+X_TICKS = [
+    dict(dtickrange=[None, 600_000], value="%H:%M"),           # zoom max → 5 min
+    dict(dtickrange=[600_000, 3_600_000], value="%H:%M"),
+    dict(dtickrange=[3_600_000, 86_400_000], value="%d.%m. %H:%M"),
+    dict(dtickrange=[86_400_000, 604_800_000], value="%d.%m."),
+    dict(dtickrange=[604_800_000, None], value="%d.%m.%Y"),
+]
 
 # ---------- podaci i proračun (jednom na startu) ----------
 df5 = load_5m()
@@ -26,7 +32,7 @@ TREND = {tf: analyze(df5, tf, n=SWING_N[tf]) for tf in DATA}
 
 # sati bez trgovanja (vikend, dnevna pauza) sakrivamo da graf nema rupa
 _h1 = DATA["1h"].index
-GAPS = pd.date_range(_h1[0], _h1[-1], freq="1h").difference(_h1).strftime(FMT).tolist()
+GAPS = pd.date_range(_h1[0], _h1[-1], freq="1h").difference(_h1).tolist()
 
 
 def rgba(color: str, a: float) -> str:
@@ -36,7 +42,7 @@ def rgba(color: str, a: float) -> str:
 
 def build_fig(tf: str, layers: list, store: dict) -> go.Figure:
     df = DATA[tf]
-    x = df.index.strftime(FMT)
+    x = df.index
     x_end = x[-1]
     fig = go.Figure(go.Candlestick(
         x=x, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
@@ -45,7 +51,7 @@ def build_fig(tf: str, layers: list, store: dict) -> go.Figure:
     if "zones" in layers:  # deblje, poluprozirne zone; jače (više dodira) = vidljivije
         for z in ZONES.itertuples():
             col = {"support": GREEN, "resistance": RED}.get(z.kind, AMBER)
-            x0 = z.start.strftime(FMT)
+            x0 = z.start
             fig.add_trace(go.Scatter(
                 x=[x0, x_end, x_end, x0, x0], y=[z.low, z.low, z.high, z.high, z.low],
                 mode="lines", line=dict(color=rgba(col, 0.8), width=1),
@@ -59,17 +65,20 @@ def build_fig(tf: str, layers: list, store: dict) -> go.Figure:
             s = sw[sw["kind"] == kind]
             cols = [GREEN if lb in ("HH", "HL") else RED if lb in ("LH", "LL") else "#9e9e9e" for lb in s["label"]]
             fig.add_trace(go.Scatter(
-                x=s.index.strftime(FMT), y=s["price"], mode="markers+text", text=s["label"],
+                x=s.index, y=s["price"], mode="markers+text", text=s["label"],
                 textposition=pos, textfont=dict(color=cols, size=11),
                 marker=dict(symbol=sym, size=6, color=cols), hoverinfo="skip", showlegend=False))
 
-    x_start = (df5.index[-1] - pd.Timedelta(days=3)).strftime(FMT)  # početni pogled: zadnja 3 dana
+    x_start = df5.index[-1] - pd.Timedelta(days=3)  # početni pogled: zadnja 3 dana
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="#14161a", plot_bgcolor="#14161a",
         margin=dict(l=8, r=8, t=8, b=8), dragmode="pan", uirevision="keep",
-        xaxis=dict(rangeslider_visible=False, range=[x_start, (df5.index[-1] + pd.Timedelta(hours=2)).strftime(FMT)],
-                   rangebreaks=[dict(values=GAPS, dvalue=3_600_000)], gridcolor="#22252b"),
-        yaxis=dict(side="right", fixedrange=True, gridcolor="#22252b"),  # y se sam prilagođava (callback dolje)
+        xaxis=dict(type="date", rangeslider_visible=False,
+                   range=[x_start, df5.index[-1] + pd.Timedelta(hours=2)],
+                   tickformatstops=X_TICKS, rangebreaks=[dict(values=GAPS, dvalue=3_600_000)],
+                   gridcolor="#22252b"),
+        yaxis=dict(side="right", fixedrange=True, gridcolor="#22252b",
+                   tickformat=".2f", showexponent="none"),  # pune cijene, bez 30k skraćivanja
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
         shapes=store.get("shapes", []), annotations=store.get("annotations", []))
     return fig
@@ -157,22 +166,31 @@ clientside_callback(
     }""",
     Output("d_clr", "data"), Input("clear", "n_clicks"))
 
-# 4) y os se automatski prilagodi vidljivom x rasponu (Plotly to sam ne radi)
+# 4) y-fit + x tick granularnost do 5 min pri max zoomu
 clientside_callback(
     """function(rd, fig) {
         setTimeout(function() {
             const gd = document.querySelector('#chart .js-plotly-plot');
             if (!gd || !gd._fullLayout || !gd.data.length) return;
             const tr = gd.data[0], r = gd._fullLayout.xaxis.range;
-            const a = String(r[0]).replace('T', ' '), b = String(r[1]).replace('T', ' ');
+            const t0 = new Date(r[0]).getTime(), t1 = new Date(r[1]).getTime(), span = t1 - t0;
             let lo = Infinity, hi = -Infinity;
             for (let i = 0; i < tr.x.length; i++) {
-                if (tr.x[i] >= a && tr.x[i] <= b) { if (tr.low[i] < lo) lo = tr.low[i]; if (tr.high[i] > hi) hi = tr.high[i]; }
+                const t = new Date(tr.x[i]).getTime();
+                if (t >= t0 && t <= t1) { if (tr.low[i] < lo) lo = tr.low[i]; if (tr.high[i] > hi) hi = tr.high[i]; }
             }
-            if (!isFinite(lo)) return;
-            const pad = (hi - lo) * 0.06 || 1, cur = gd._fullLayout.yaxis.range;
-            if (Math.abs(cur[0] - (lo - pad)) < 1e-6 && Math.abs(cur[1] - (hi + pad)) < 1e-6) return;
-            Plotly.relayout(gd, {'yaxis.range': [lo - pad, hi + pad]});
+            const upd = {};
+            if (span <= 6 * 3600000) upd['xaxis.dtick'] = 300000;       // ≤6h → tick svakih 5 min
+            else if (span <= 24 * 3600000) upd['xaxis.dtick'] = 900000; // ≤1d → 15 min
+            else if (span <= 7 * 86400000) upd['xaxis.dtick'] = 3600000; // ≤7d → 1h
+            else upd['xaxis.dtick'] = null;
+            if (isFinite(lo)) {
+                const pad = (hi - lo) * 0.06 || 1, cur = gd._fullLayout.yaxis.range;
+                const ylo = lo - pad, yhi = hi + pad;
+                if (Math.abs(cur[0] - ylo) >= 1e-6 || Math.abs(cur[1] - yhi) >= 1e-6)
+                    upd['yaxis.range'] = [ylo, yhi];
+            }
+            if (Object.keys(upd).length) Plotly.relayout(gd, upd);
         }, 150);
         return window.dash_clientside.no_update;
     }""",
