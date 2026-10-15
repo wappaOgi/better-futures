@@ -1,5 +1,7 @@
 .venv/
 __pycache__/
 *.py[cod]
-mnq_5m.csv
+*_5m.csv
+trades.json
+bank.json
 .DS_Store
