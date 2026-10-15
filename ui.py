@@ -132,7 +132,7 @@ def build_fig(market, tf, layers, store, trades, draft):
                    range=[x_start, df5.index[-1] + pd.Timedelta(hours=2)],
                    tickformatstops=X_TICKS, rangebreaks=[dict(values=gaps, dvalue=3_600_000)],
                    gridcolor="#22252b"),
-        yaxis=dict(side="right", fixedrange=True, gridcolor="#22252b",
+        yaxis=dict(side="right", fixedrange=False, gridcolor="#22252b",
                    tickformat=".2f", showexponent="none"),
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
         shapes=sess_shapes + trade_shapes + draft_sh + [price_line] + store.get("shapes", []),
@@ -222,7 +222,7 @@ def trade_form(draft):
 
 
 CONFIG = {
-    "scrollZoom": True, "displaylogo": False,
+    "scrollZoom": True, "displaylogo": False, "doubleClick": "reset",
     "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape"],
     "edits": {"shapePosition": True, "annotationPosition": True, "annotationText": True},
 }
@@ -487,7 +487,7 @@ clientside_callback(
     Output("d_clr", "data"), Input("clear", "n_clicks"))
 
 clientside_callback(
-    """function(rd, fig) {
+    """function(fig) {
         setTimeout(function() {
             const gd = document.querySelector('#chart .js-plotly-plot');
             if (!gd || !gd._fullLayout || !gd.data.length) return;
@@ -504,16 +504,61 @@ clientside_callback(
             else if (span <= 7 * 86400000) upd['xaxis.dtick'] = 3600000;
             else upd['xaxis.dtick'] = null;
             if (isFinite(lo)) {
-                const pad = (hi - lo) * 0.06 || 1, cur = gd._fullLayout.yaxis.range;
-                const ylo = lo - pad, yhi = hi + pad;
-                if (Math.abs(cur[0] - ylo) >= 1e-6 || Math.abs(cur[1] - yhi) >= 1e-6)
-                    upd['yaxis.range'] = [ylo, yhi];
+                const pad = (hi - lo) * 0.06 || 1;
+                upd['yaxis.range'] = [lo - pad, hi + pad];
             }
             if (Object.keys(upd).length) Plotly.relayout(gd, upd);
+            if (!gd._wheelBound) {
+                gd._wheelBound = true;
+                gd.addEventListener('wheel', function(e) {
+                    if (!gd._fullLayout || !gd.querySelector('.nsewdrag')) return;
+                    const fl = gd._fullLayout;
+                    const plot = gd.querySelector('.nsewdrag');
+                    const bb = plot.getBoundingClientRect();
+                    if (e.clientX < bb.left || e.clientX > bb.right || e.clientY < bb.top || e.clientY > bb.bottom) return;
+                    e.preventDefault();
+                    const f = Math.pow(1.08, e.deltaY > 0 ? 1 : -1);
+                    const xa = fl.xaxis, ya = fl.yaxis;
+                    const xp = e.clientX - bb.left, yp = bb.bottom - e.clientY;
+                    const xv = xa.p2d(xa._offset + xp);
+                    const yv = ya.p2d(ya._offset + yp);
+                    function zr(rng, c, fac, isDate) {
+                        let a = isDate ? new Date(rng[0]).getTime() : rng[0];
+                        let b = isDate ? new Date(rng[1]).getTime() : rng[1];
+                        let cv = isDate ? new Date(c).getTime() : c;
+                        const n0 = cv - (cv - a) * fac, n1 = cv + (b - cv) * fac;
+                        return isDate ? [new Date(n0), new Date(n1)] : [n0, n1];
+                    }
+                    const isDate = xa.type === 'date';
+                    Plotly.relayout(gd, {
+                        'xaxis.range': zr(xa.range, xv, f, isDate),
+                        'yaxis.range': zr(ya.range, yv, f, false),
+                    });
+                }, {passive: false});
+            }
         }, 150);
         return window.dash_clientside.no_update;
     }""",
-    Output("d_fit", "data"), Input("chart", "relayoutData"), Input("chart", "figure"))
+    Output("d_fit", "data"), Input("chart", "figure"))
+
+clientside_callback(
+    """function(rd) {
+        if (!rd) return window.dash_clientside.no_update;
+        setTimeout(function() {
+            const gd = document.querySelector('#chart .js-plotly-plot');
+            if (!gd || !gd._fullLayout) return;
+            const r = gd._fullLayout.xaxis.range;
+            const span = new Date(r[1]).getTime() - new Date(r[0]).getTime();
+            const upd = {};
+            if (span <= 6 * 3600000) upd['xaxis.dtick'] = 300000;
+            else if (span <= 24 * 3600000) upd['xaxis.dtick'] = 900000;
+            else if (span <= 7 * 86400000) upd['xaxis.dtick'] = 3600000;
+            else upd['xaxis.dtick'] = null;
+            if (Object.keys(upd).length) Plotly.relayout(gd, upd);
+        }, 50);
+        return window.dash_clientside.no_update;
+    }""",
+    Output("d_fit", "data", allow_duplicate=True), Input("chart", "relayoutData"), prevent_initial_call=True)
 
 
 if __name__ == "__main__":

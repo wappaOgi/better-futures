@@ -229,20 +229,35 @@ def _trade_end(trade: dict, x_end) -> pd.Timestamp:
     return pd.Timestamp(x_end)
 
 
+def _box_label(x, y, text, color, anchor="left", valign="middle"):
+    return dict(
+        x=x, y=y, xref="x", yref="y", text=text, showarrow=False,
+        xanchor=anchor, yanchor=valign, font=dict(size=9, color=color),
+        bgcolor="rgba(0,0,0,0.45)", borderpad=2, name="trade",
+    )
+
+
+def _box_pad(lo: float, hi: float) -> tuple[float, float]:
+    pad = max((hi - lo) * 0.22, 18.0)
+    return lo - pad, hi + pad
+
+
 def chart_overlays(trade: dict, x_end) -> tuple[list, list]:
-    """Plavi box (otvaranje→zatvaranje); ✓/✗ ikona gore desno."""
+    """Plavi box s oznakama: smjer, entry, SL, TP; ✓/✗ gore desno."""
     shapes, ann = [], []
     t0 = pd.Timestamp(trade["opened_at"])
     t1 = _trade_end(trade, x_end)
     entry = trade["entry_price"]
     sl, tp = trade["stop_loss"], trade["take_profit"]
+    sl_pts, tp_pts = trade.get("sl_points", 0), trade.get("tp_points", 0)
     direction = trade["direction"]
     status = trade.get("status", "open")
     lo, hi = min(sl, tp, entry), max(sl, tp, entry)
-    t_mid = t0 + (t1 - t0) / 2
+    box_lo, box_hi = _box_pad(lo, hi)
+    t_lbl = t0 + (t1 - t0) * 0.04
 
     shapes.extend([
-        dict(type="rect", xref="x", yref="y", x0=t0, x1=t1, y0=lo, y1=hi,
+        dict(type="rect", xref="x", yref="y", x0=t0, x1=t1, y0=box_lo, y1=box_hi,
              fillcolor=_rgba(BLUE, 0.10), line=dict(color=BLUE, width=2), layer="above", name="trade"),
         dict(type="line", xref="x", yref="y", x0=t0, x1=t1, y0=entry, y1=entry,
              line=dict(color=BLUE, width=1, dash="dash"), layer="above", name="trade"),
@@ -252,33 +267,29 @@ def chart_overlays(trade: dict, x_end) -> tuple[list, list]:
              line=dict(color=GREEN, width=1, dash="dot"), layer="above", name="trade"),
     ])
 
-    sym = "▲" if direction == "long" else "▼"
+    sym = "▲ LONG" if direction == "long" else "▼ SHORT"
+    if trade.get("test"):
+        sym = f"[test] {sym}"
+    ann.append(_box_label(t_lbl, box_hi, sym, BLUE, valign="top"))
+
+    ann.append(_box_label(t_lbl, tp, f"TP {tp:.2f} · {tp_pts:+.0f} pts", GREEN))
+    ann.append(_box_label(t_lbl, entry, f"E {entry:.2f} · 0 pts", BLUE))
+    ann.append(_box_label(t_lbl, sl, f"SL {sl:.2f} · {sl_pts:+.0f} pts", RED))
+
     if status in ("win", "loss"):
         icon = "✓" if status == "win" else "✗"
         icon_col = GREEN if status == "win" else RED
         pnl_pts = trade.get("pnl_points") or 0
         pnl_e = trade.get("pnl_eur") or 0
         sign = "+" if pnl_e >= 0 else ""
-        txt = f"{sym} {sign}{pnl_pts:.0f} pts · {sign}{pnl_e:.2f} €"
-        if trade.get("test"):
-            txt = f"[test] {txt}"
         ann.append(dict(
-            x=t1, y=hi, xref="x", yref="y", text=icon, showarrow=False,
+            x=t1, y=box_hi, xref="x", yref="y", text=icon, showarrow=False,
             xanchor="right", yanchor="top", font=dict(size=16, color=icon_col),
             bgcolor="rgba(0,0,0,0.5)", borderpad=3, name="trade",
         ))
-        ann.append(dict(
-            x=t_mid, y=entry, xref="x", yref="y", text=txt, showarrow=False,
-            xanchor="center", yanchor="middle", font=dict(size=10, color="#d7dae0"),
-            bgcolor="rgba(0,0,0,0.55)", borderpad=4, name="trade",
-        ))
-    else:
-        txt = f"{sym} {direction.upper()}"
-        if trade.get("test"):
-            txt = f"[test] {txt}"
-        ann.append(dict(
-            x=t_mid, y=entry, xref="x", yref="y", text=txt, showarrow=False,
-            xanchor="center", font=dict(size=10, color=BLUE), bgcolor="rgba(0,0,0,0.55)", name="trade",
+        mid_y = entry + (tp - entry) / 2 if status == "win" else entry + (sl - entry) / 2
+        ann.append(_box_label(
+            t_lbl, mid_y, f"{sign}{pnl_pts:.0f} pts · {sign}{pnl_e:.2f} €", icon_col,
         ))
 
     return shapes, ann
@@ -292,10 +303,12 @@ def draft_overlays(draft: dict, x_end) -> tuple[list, list]:
     t1 = pd.Timestamp(x_end)
     entry = draft["entry_price"]
     sl, tp = draft["stop_loss"], draft["take_profit"]
+    sl_pts, tp_pts = draft.get("sl_points", 0), draft.get("tp_points", 0)
     lo, hi = min(sl, tp, entry), max(sl, tp, entry)
+    box_lo, box_hi = _box_pad(lo, hi)
 
     shapes = [
-        dict(type="rect", xref="x", yref="y", x0=t0, x1=t1, y0=lo, y1=hi,
+        dict(type="rect", xref="x", yref="y", x0=t0, x1=t1, y0=box_lo, y1=box_hi,
              fillcolor=_rgba(BLUE, 0.08), line=dict(color=BLUE, width=2, dash="dash"),
              layer="above", name="draft"),
         dict(type="line", xref="x", yref="y", x0=t0, x1=t1, y0=entry, y1=entry,
@@ -305,13 +318,16 @@ def draft_overlays(draft: dict, x_end) -> tuple[list, list]:
         dict(type="rect", xref="x", yref="y", x0=t0, x1=t1, y0=tp - 6, y1=tp + 6,
              fillcolor=_rgba(GREEN, 0.35), line=dict(color=GREEN, width=2), layer="above", name="draft-tp"),
     ]
-    t_mid = t0 + (t1 - t0) / 2
+    t_lbl = t0 + (t1 - t0) * 0.04
+    sym = "▲ LONG" if draft["direction"] == "long" else "▼ SHORT"
     ann = [
-        dict(x=t_mid, y=sl, xref="x", yref="y", text=f"SL {sl:.2f} ({draft['sl_points']:.0f} pts)",
-             showarrow=False, xanchor="center", font=dict(size=10, color=RED), name="draft"),
-        dict(x=t_mid, y=tp, xref="x", yref="y", text=f"TP {tp:.2f} ({draft['tp_points']:.0f} pts)",
-             showarrow=False, xanchor="center", font=dict(size=10, color=GREEN), name="draft"),
+        _box_label(t_lbl, box_hi, sym, BLUE, valign="top"),
+        _box_label(t_lbl, tp, f"TP {tp:.2f} · {tp_pts:+.0f} pts", GREEN),
+        _box_label(t_lbl, entry, f"E {entry:.2f} · 0 pts", BLUE),
+        _box_label(t_lbl, sl, f"SL {sl:.2f} · {sl_pts:+.0f} pts", RED),
     ]
+    for a in ann:
+        a["name"] = "draft"
     return shapes, ann
 
 
