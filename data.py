@@ -15,6 +15,15 @@ def cache_path(ticker: str) -> Path:
     return Path(__file__).with_name(f"{safe}_5m.csv")
 
 
+def clear_cache(ticker: str) -> bool:
+    """Obriši lokalni CSV cache za ticker. Vraća True ako je datoteka obrisana."""
+    path = cache_path(ticker)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
 def _to_zagreb(df: pd.DataFrame) -> pd.DataFrame:
     if df.index.tz is None:
         df = df.copy()

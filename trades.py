@@ -21,9 +21,31 @@ def save(trades: list) -> None:
     FILE.write_text(json.dumps(trades, indent=2, default=str))
 
 
+def commit(trades: list, df5: pd.DataFrame | None = None) -> list:
+    """Spremi u trades.json, ažuriraj banku, vrati svježu listu s diska."""
+    if df5 is not None:
+        trades = resolve_all(trades, df5)
+    save(trades)
+    recalc(trades)
+    return load()
+
+
+def get(trade_id: str) -> dict | None:
+    return next((t for t in load() if t["id"] == trade_id), None)
+
+
 def pts(entry: float, price: float, direction: str) -> float:
     diff = price - entry
     return round(diff if direction == "long" else -diff, 2)
+
+
+def apply_levels(entry: float, direction: str, sl_pts_abs: float, tp_pts_abs: float) -> tuple[float, float, float, float]:
+    sl_dist, tp_dist = abs(float(sl_pts_abs)), abs(float(tp_pts_abs))
+    if direction == "long":
+        sl, tp = entry - sl_dist, entry + tp_dist
+    else:
+        sl, tp = entry + sl_dist, entry - tp_dist
+    return sl, tp, pts(entry, sl, direction), pts(entry, tp, direction)
 
 
 def pnl_eur_for(trade: dict, bank: dict | None = None) -> float:
@@ -189,23 +211,58 @@ def resolve_all(trades: list, df5: pd.DataFrame) -> list:
     return [resolve_one(t, df5) for t in trades]
 
 
-def add_trade(draft: dict, df5: pd.DataFrame) -> list:
-    trades = resolve_all(load(), df5)
+def add_trade(draft: dict, df5: pd.DataFrame | None = None) -> list:
+    trades = load()
+    if df5 is not None:
+        trades = resolve_all(trades, df5)
     trades.append(from_draft(draft))
-    trades = resolve_all(trades, df5)
-    save(trades)
-    recalc(trades)
-    return trades
+    return commit(trades, df5)
+
+
+def update_trade(
+    trade_id: str,
+    *,
+    entry_price: float,
+    direction: str,
+    sl_pts_abs: float,
+    tp_pts_abs: float,
+    size_eur: float,
+    margin: int,
+    df5: pd.DataFrame | None = None,
+) -> list:
+    trades = load()
+    idx = next((i for i, t in enumerate(trades) if t["id"] == trade_id), None)
+    if idx is None:
+        return trades
+    entry = float(entry_price)
+    sl, tp, sl_pts, tp_pts = apply_levels(entry, direction, sl_pts_abs, tp_pts_abs)
+    t = trades[idx].copy()
+    t.update({
+        "entry_price": entry,
+        "direction": direction,
+        "stop_loss": sl,
+        "take_profit": tp,
+        "sl_points": sl_pts,
+        "tp_points": tp_pts,
+        "size_eur": float(size_eur),
+        "margin": int(margin),
+        "status": "open",
+        "closed_at": None,
+        "exit_price": None,
+        "pnl_points": None,
+        "pnl_eur": None,
+    })
+    trades[idx] = t
+    return commit(trades, df5)
+
+
+def delete_trade(trade_id: str, df5: pd.DataFrame | None = None) -> list:
+    trades = [t for t in load() if t["id"] != trade_id]
+    return commit(trades, df5)
 
 
 def seed_test_trades(df5: pd.DataFrame) -> list:
-    trades = load()
-    if trades:
-        trades = resolve_all(trades, df5)
-        save(trades)
-        recalc(trades)
-        return trades
-
+    trades = []
     bank = load_bank()
     days = sorted({t.date() for t in df5.index})[-5:]
     for i, day in enumerate(days):
@@ -246,10 +303,7 @@ def seed_test_trades(df5: pd.DataFrame) -> list:
             "pnl_eur": None,
         })
 
-    trades = resolve_all(trades, df5)
-    save(trades)
-    recalc(trades)
-    return trades
+    return commit(trades, df5)
 
 
 def _rgba(color: str, a: float) -> str:
