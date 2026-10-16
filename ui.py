@@ -704,10 +704,34 @@ def sync_trades_from_json(tab):
 
 
 clientside_callback(
-    """function(_) {
+    """function(rd) {
+        if (!rd) return window.dash_clientside.no_update;
+        const keys = Object.keys(rd);
+        if (!keys.some(k => k.startsWith('shapes[') || k.startsWith('annotations[')))
+            return window.dash_clientside.no_update;
         const gd = document.querySelector('#chart .js-plotly-plot');
         if (!gd) return window.dash_clientside.no_update;
-        const skip = n => !['timeline','session','trendstrip','lastprice','trade','draft','draft-sl','draft-tp'].includes(n);
+        const locked = ['timeline','session','trendstrip','lastprice','trade','draft','draft-sl','draft-tp'];
+        const isLocked = n => locked.includes(n);
+        if (gd._lockedSnap) {
+            const fix = {};
+            for (const k of keys) {
+                const sm = k.match(/^shapes\\[(\\d+)\\]\\.(\\w+)$/);
+                if (sm) {
+                    const i = +sm[1], s = (gd._fullLayout.shapes || [])[i];
+                    if (s && isLocked(s.name) && gd._lockedSnap.shapes[i])
+                        fix[k] = gd._lockedSnap.shapes[i][sm[2]];
+                }
+                const am = k.match(/^annotations\\[(\\d+)\\]\\.(\\w+)$/);
+                if (am) {
+                    const i = +am[1], a = (gd._fullLayout.annotations || [])[i];
+                    if (a && isLocked(a.name) && gd._lockedSnap.annotations[i])
+                        fix[k] = gd._lockedSnap.annotations[i][am[2]];
+                }
+            }
+            if (Object.keys(fix).length) Plotly.relayout(gd, fix);
+        }
+        const skip = n => !isLocked(n);
         const sh = (gd.layout.shapes || []).filter(s => skip(s.name));
         const an = (gd.layout.annotations || []).filter(a => skip(a.name));
         return JSON.parse(JSON.stringify({shapes: sh, annotations: an}));
@@ -740,6 +764,10 @@ clientside_callback(
         setTimeout(function() {
             const gd = document.querySelector('#chart .js-plotly-plot');
             if (!gd || !gd._fullLayout || !gd.data.length) return;
+            gd._lockedSnap = {
+                shapes: (gd.layout.shapes || []).map(s => JSON.parse(JSON.stringify(s))),
+                annotations: (gd.layout.annotations || []).map(a => JSON.parse(JSON.stringify(a))),
+            };
             const tr = gd.data[0], r = gd._fullLayout.xaxis.range;
             const t0 = new Date(r[0]).getTime(), t1 = new Date(r[1]).getTime(), span = t1 - t0;
             let lo = Infinity, hi = -Infinity;

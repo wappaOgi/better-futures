@@ -344,15 +344,16 @@ def chart_overlays(trade: dict, x_end) -> tuple[list, list]:
     box_lo, box_hi = _box_pad(lo, hi)
     t_lbl = t0 + (t1 - t0) * 0.04
 
+    _fixed = dict(layer="above", name="trade", editable=False)
     shapes.extend([
         dict(type="rect", xref="x", yref="y", x0=t0, x1=t1, y0=box_lo, y1=box_hi,
-             fillcolor=_rgba(BLUE, 0.10), line=dict(color=BLUE, width=2), layer="above", name="trade"),
+             fillcolor=_rgba(BLUE, 0.10), line=dict(color=BLUE, width=2), **_fixed),
         dict(type="line", xref="x", yref="y", x0=t0, x1=t1, y0=entry, y1=entry,
-             line=dict(color=BLUE, width=1, dash="dash"), layer="above", name="trade"),
+             line=dict(color=BLUE, width=1, dash="dash"), **_fixed),
         dict(type="line", xref="x", yref="y", x0=t0, x1=t1, y0=sl, y1=sl,
-             line=dict(color=RED, width=1, dash="dot"), layer="above", name="trade"),
+             line=dict(color=RED, width=1, dash="dot"), **_fixed),
         dict(type="line", xref="x", yref="y", x0=t0, x1=t1, y0=tp, y1=tp,
-             line=dict(color=GREEN, width=1, dash="dot"), layer="above", name="trade"),
+             line=dict(color=GREEN, width=1, dash="dot"), **_fixed),
     ])
 
     sym = "▲ LONG" if direction == "long" else "▼ SHORT"
