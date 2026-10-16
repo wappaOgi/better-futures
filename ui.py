@@ -1,14 +1,15 @@
 """UI: Dash + Plotly. Pokretanje: python ui.py  ->  http://127.0.0.1:8050"""
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, State, clientside_callback, dcc, html, no_update
+from dash import Dash, Input, Output, State, clientside_callback, ctx, dcc, html, no_update
 
 from bank import load as load_bank, recalc, risk_eur, save as save_bank, update_settings
 from data import DEFAULT_TICKER, load_5m, resample
 from sessions import overlays as session_overlays
+from timelines import overlays as timeline_overlays
 from trades import (
-    add_trade, chart_overlays, draft_overlays, load as load_trades,
-    make_draft, seed_test_trades, update_draft_levels,
+    add_trade, chart_overlays, load as load_trades,
+    make_draft_manual, resolve_all, save as save_trades, seed_test_trades,
 )
 from trend import analyze
 from zones import get_zones
@@ -27,6 +28,18 @@ PANEL = {
     "padding": "10px 12px", "marginTop": "6px",
 }
 INP = {"width": "110px", "marginRight": "8px"}
+MODAL_HIDE = {"display": "none"}
+MODAL_SHOW = {
+    "display": "flex", "position": "fixed", "top": 0, "left": 0, "right": 0, "bottom": 0,
+    "backgroundColor": "rgba(0,0,0,0.65)", "zIndex": 1000,
+    "alignItems": "center", "justifyContent": "center",
+}
+MODAL_BOX = {
+    "background": "#1c1f26", "border": "1px solid #444", "borderRadius": "8px",
+    "padding": "20px 24px", "minWidth": "340px", "maxWidth": "420px", "boxShadow": "0 8px 32px rgba(0,0,0,0.5)",
+}
+MODAL_ROW = {"marginBottom": "12px"}
+MODAL_LBL = {"display": "block", "color": "#aaa", "fontSize": "12px", "marginBottom": "4px"}
 TICKER_OPTS = [
     {"label": "MNQ", "value": "MNQ=F"},
     {"label": "NQ", "value": "NQ=F"},
@@ -53,9 +66,20 @@ def build_market(ticker: str, days: int) -> dict:
     }
 
 
-MARKET = build_market(DEFAULT_TICKER, 5)
-TRADES = seed_test_trades(MARKET["df5"])
-BANK = recalc(TRADES)
+MARKET = None
+TRADES = load_trades()
+BANK = recalc(TRADES) if TRADES else load_bank()
+
+
+def empty_fig(msg: str = "Odaberi ticker i klikni Učitaj") -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="#14161a", plot_bgcolor="#14161a",
+        margin=dict(l=8, r=72, t=40, b=62),
+        title=dict(text=msg, font=dict(size=14, color="#888"), x=0.5, xanchor="center"),
+        xaxis=dict(visible=False), yaxis=dict(visible=False),
+    )
+    return fig
 
 
 def rgba(color: str, a: float) -> str:
@@ -63,7 +87,7 @@ def rgba(color: str, a: float) -> str:
     return f"rgba({int(c[0:2], 16)},{int(c[2:4], 16)},{int(c[4:6], 16)},{a:.2f})"
 
 
-def build_fig(market, tf, layers, store, trades, draft):
+def build_fig(market, tf, layers, store, trades):
     df = market["data"][tf]
     df5 = market["df5"]
     zones = market["zones"]
@@ -111,6 +135,7 @@ def build_fig(market, tf, layers, store, trades, draft):
         bgcolor=last_col, bordercolor=last_col, font=dict(color="#fff", size=11),
     )
 
+    tl_shapes, tl_ann = timeline_overlays(df5.index[0], df5.index[-1])
     sess_shapes, sess_ann = [], []
     if "sessions" in layers:
         sess_shapes, sess_ann = session_overlays(df5.index[0], df5.index[-1])
@@ -122,12 +147,10 @@ def build_fig(market, tf, layers, store, trades, draft):
             trade_shapes.extend(sh)
             trade_ann.extend(an)
 
-    draft_sh, draft_an = draft_overlays(draft, x_end) if draft else ([], [])
-
     x_start = df5.index[-1] - pd.Timedelta(days=view_days)
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="#14161a", plot_bgcolor="#14161a",
-        margin=dict(l=8, r=72, t=8, b=8), dragmode="pan", uirevision="keep",
+        margin=dict(l=8, r=72, t=8, b=62), dragmode="pan", uirevision="keep",
         xaxis=dict(type="date", rangeslider_visible=False,
                    range=[x_start, df5.index[-1] + pd.Timedelta(hours=2)],
                    tickformatstops=X_TICKS, rangebreaks=[dict(values=gaps, dvalue=3_600_000)],
@@ -135,8 +158,8 @@ def build_fig(market, tf, layers, store, trades, draft):
         yaxis=dict(side="right", fixedrange=False, gridcolor="#22252b",
                    tickformat=".2f", showexponent="none"),
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
-        shapes=sess_shapes + trade_shapes + draft_sh + [price_line] + store.get("shapes", []),
-        annotations=sess_ann + trade_ann + draft_an + [price_ann] + store.get("annotations", []),
+        shapes=tl_shapes + sess_shapes + trade_shapes + [price_line] + store.get("shapes", []),
+        annotations=tl_ann + sess_ann + trade_ann + [price_ann] + store.get("annotations", []),
     )
     return fig
 
@@ -191,33 +214,48 @@ def trades_table(trades):
     )
 
 
-def trade_form(draft):
-    if not draft or not draft.get("active"):
-        return html.P("Uključi Trejd mod i klikni na graf.", style={"color": "#888", "margin": "4px 0"})
-    d = draft["direction"]
-    col = GREEN if d == "long" else RED
-    return html.Div([
-        html.Div([
-            html.Strong("Entry: ", style={"color": col}),
-            html.Span(f"{draft['entry_price']:.2f} · {d.upper()} · {draft['opened_at'][:16]}"),
+def trade_modal():
+    btn = {"padding": "6px 14px", "borderRadius": "4px", "border": "none", "cursor": "pointer", "fontSize": "14px"}
+    return html.Div(id="trade-modal", style=MODAL_HIDE, children=[
+        html.Div(style=MODAL_BOX, children=[
+            html.H3("Novi trejd", style={"margin": "0 0 16px", "fontSize": "18px"}),
+            html.Div(style=MODAL_ROW, children=[
+                html.Label("Entry (trenutna cijena)", style=MODAL_LBL),
+                dcc.Input(id="modal-entry", type="number", disabled=True, style={**INP, "width": "100%", "opacity": 0.85}),
+            ]),
+            html.Div(style=MODAL_ROW, children=[
+                html.Label("Smjer", style=MODAL_LBL),
+                dcc.RadioItems(
+                    id="modal-direction", value="long",
+                    options=[{"label": " Long", "value": "long"}, {"label": " Short", "value": "short"}],
+                    labelStyle={"marginRight": "16px", "cursor": "pointer"},
+                    inputStyle={"marginRight": "4px"},
+                ),
+            ]),
+            html.Div(style=MODAL_ROW, children=[
+                html.Label("Stop loss (bodovi)", style=MODAL_LBL),
+                dcc.Input(id="modal-sl-pts", type="number", value=30, min=1, style={**INP, "width": "100%"}),
+            ]),
+            html.Div(style=MODAL_ROW, children=[
+                html.Label("Take profit (bodovi)", style=MODAL_LBL),
+                dcc.Input(id="modal-tp-pts", type="number", value=60, min=1, style={**INP, "width": "100%"}),
+            ]),
+            html.Div(id="modal-preview", style={"color": "#aaa", "fontSize": "13px", "marginBottom": "12px"}),
+            html.Div(style=MODAL_ROW, children=[
+                html.Label("Iznos €", style=MODAL_LBL),
+                dcc.Input(id="modal-size", type="number", style={**INP, "width": "100%"}),
+            ]),
+            html.Div(style=MODAL_ROW, children=[
+                html.Label("Margina", style=MODAL_LBL),
+                dcc.Input(id="modal-margin", type="number", value=1, min=1, style={**INP, "width": "100%"}),
+            ]),
+            html.Div(style={"display": "flex", "gap": "10px", "marginTop": "16px", "justifyContent": "flex-end"}, children=[
+                html.Button("Odustani", id="modal-cancel", n_clicks=0,
+                            style={**btn, "background": "#444", "color": "#ccc"}),
+                html.Button("Spremi trejd", id="modal-save", n_clicks=0,
+                            style={**btn, "background": GREEN, "color": "#fff"}),
+            ]),
         ]),
-        html.Div([
-            html.Label("SL "), dcc.Input(id="inp-sl", type="number", value=draft["stop_loss"], style=INP),
-            html.Label("TP "), dcc.Input(id="inp-tp", type="number", value=draft["take_profit"], style=INP),
-            html.Label("Iznos € "), dcc.Input(id="inp-size", type="number", value=draft["size_eur"], style=INP),
-            html.Label("Margina "), dcc.Input(id="inp-margin", type="number", value=draft["margin"], style=INP),
-        ], style={"marginTop": "8px"}),
-        html.Div([
-            html.Span(f"SL {draft['sl_points']:.0f} pts · TP {draft['tp_points']:.0f} pts · risk {draft['risk_eur']:.2f} €",
-                      style={"color": "#aaa", "marginRight": "12px"}),
-            html.Button("Spremi trejd ✓", id="save-trade", n_clicks=0,
-                        style={"background": GREEN, "color": "#fff", "border": "none", "padding": "4px 12px",
-                               "borderRadius": "4px", "cursor": "pointer"}),
-            html.Button("Odustani", id="cancel-trade", n_clicks=0,
-                        style={"marginLeft": "8px", "background": "#444", "color": "#ccc", "border": "none",
-                               "padding": "4px 12px", "borderRadius": "4px", "cursor": "pointer"}),
-        ], style={"marginTop": "10px"}),
-        html.P("Povuci crveni (SL) i zeleni (TP) pravokutnik na grafu.", style={"color": "#666", "fontSize": "12px"}),
     ])
 
 
@@ -236,8 +274,7 @@ app.layout = html.Div(
     children=[
         dcc.Store(id="trades-store", data=TRADES),
         dcc.Store(id="bank-store", data=BANK),
-        dcc.Store(id="market-store", data={"ticker": DEFAULT_TICKER, "days": 5, "status": "ok"}),
-        dcc.Store(id="draft-trade", data={}),
+        dcc.Store(id="market-store", data={"status": "idle"}),
         dcc.Store(id="store", data={}),
         dcc.Store(id="d_fit"), dcc.Store(id="d_txt"), dcc.Store(id="d_clr"),
         dcc.Tabs([
@@ -255,21 +292,18 @@ app.layout = html.Div(
                                   options=[
                                       {"label": "S/R zone (1h)", "value": "zones"},
                                       {"label": "HH/HL/LH/LL", "value": "swings"},
-                                      {"label": "Sesije", "value": "sessions"},
+                                      {"label": "Sesije (x-os)", "value": "sessions"},
                                       {"label": "Trejdovi", "value": "trades"},
                                   ]),
-                    dcc.Checklist(id="trade-mode", value=[], labelStyle=ITEM,
-                                  options=[{"label": "Trejd mod (klik na graf)", "value": "on"}]),
+                    html.Button("Novi trejd", id="new-trade-btn", n_clicks=0,
+                                style={"padding": "2px 12px", "cursor": "pointer", "marginRight": "8px"}),
                     dcc.Input(id="txt", type="text", placeholder="tekst bilješke", style={"width": "150px"}),
                     html.Button("Dodaj tekst", id="add_txt"),
                     html.Button("Očisti crteže", id="clear"),
                     html.Div(id="bank-badge", children=bank_panel(BANK)),
-                    html.Div(id="trend-badges", children=trend_badges(MARKET["trend"])),
+                    html.Div(id="trend-badges", children=html.Span("—", style={"color": "#666"})),
                 ]),
-                html.Details(id="trade-expander", open=False, children=[
-                    html.Summary("Novi trejd", style={"cursor": "pointer", "padding": "4px 0"}),
-                    html.Div(id="trade-form", style=PANEL, children=trade_form({})),
-                ]),
+                trade_modal(),
                 dcc.Graph(id="chart", config=CONFIG, style={"height": "78vh"}),
             ]),
             dcc.Tab(label="Trejdovi", children=[
@@ -295,20 +329,35 @@ app.layout = html.Div(
 
 @app.callback(
     Output("market-store", "data"),
+    Output("trades-store", "data"),
+    Output("bank-store", "data"),
+    Output("bank-badge", "children"),
+    Output("bank-tab-info", "children"),
+    Output("trades-table", "children"),
     Input("load-data", "n_clicks"),
     State("ticker", "value"),
     State("days", "value"),
-    prevent_initial_call=False,
+    prevent_initial_call=True,
 )
 def reload_market(_, ticker, days):
-    global MARKET
+    global MARKET, TRADES, BANK
+    if not _:
+        return no_update, no_update, no_update, no_update, no_update, no_update
     ticker = ticker or DEFAULT_TICKER
     days = max(1, min(int(days or 5), 60))
     try:
         MARKET = build_market(ticker, days)
-        return {"ticker": ticker, "days": days, "status": "ok", "rows": len(MARKET["df5"])}
+        existing = load_trades()
+        TRADES = seed_test_trades(MARKET["df5"]) if not existing else resolve_all(existing, MARKET["df5"])
+        save_trades(TRADES)
+        BANK = recalc(TRADES)
+        panel = bank_panel(BANK)
+        meta = {"ticker": ticker, "days": days, "status": "ok", "rows": len(MARKET["df5"])}
+        return meta, TRADES, BANK, panel, panel, trades_table(TRADES)
     except Exception as e:
-        return {"ticker": ticker, "days": days, "status": "error", "msg": str(e)}
+        meta = {"ticker": ticker, "days": days, "status": "error", "msg": str(e)}
+        panel = bank_panel(BANK)
+        return meta, TRADES, BANK, panel, panel, trades_table(TRADES)
 
 
 @app.callback(
@@ -316,89 +365,94 @@ def reload_market(_, ticker, days):
     Output("trend-badges", "children"),
     Input("market-store", "data"),
     Input("tf", "value"), Input("layers", "value"),
-    Input("trades-store", "data"), Input("draft-trade", "data"),
+    Input("trades-store", "data"),
     State("store", "data"),
 )
-def update_chart(meta, tf, layers, trades, draft, store):
-    if meta and meta.get("status") == "error":
-        fig = go.Figure()
-        fig.update_layout(template="plotly_dark", title=f"Greška: {meta.get('msg', '?')}")
-        return fig, html.Span(meta.get("msg", "Greška"), style={"color": RED})
+def update_chart(meta, tf, layers, trades, store):
+    if not meta or meta.get("status") == "idle" or MARKET is None:
+        return empty_fig(), html.Span("—", style={"color": "#666"})
+    if meta.get("status") == "error":
+        return empty_fig(meta.get("msg", "Greška")), html.Span(meta.get("msg", "Greška"), style={"color": RED})
     return (
-        build_fig(MARKET, tf, layers or [], store or {}, trades or [], draft or {}),
+        build_fig(MARKET, tf, layers or [], store or {}, trades or []),
         trend_badges(MARKET["trend"]),
     )
 
 
+def _modal_preview(entry, direction, sl_pts, tp_pts):
+    if entry is None or sl_pts is None or tp_pts is None:
+        return "—"
+    entry, sl_pts, tp_pts = float(entry), abs(float(sl_pts)), abs(float(tp_pts))
+    if direction == "long":
+        sl, tp = entry - sl_pts, entry + tp_pts
+    else:
+        sl, tp = entry + sl_pts, entry - tp_pts
+    return f"SL {sl:.2f} · TP {tp:.2f}"
+
+
 @app.callback(
-    Output("draft-trade", "data"),
-    Output("trade-expander", "open"),
-    Input("chart", "clickData"),
-    State("trade-mode", "value"),
+    Output("trade-modal", "style"),
+    Output("modal-entry", "value"),
+    Output("modal-direction", "value"),
+    Output("modal-sl-pts", "value"),
+    Output("modal-tp-pts", "value"),
+    Output("modal-size", "value"),
+    Output("modal-margin", "value"),
+    Output("modal-preview", "children"),
+    Input("new-trade-btn", "n_clicks"),
+    Input("modal-cancel", "n_clicks"),
+    Input("modal-save", "n_clicks"),
+    Input("modal-entry", "value"),
+    Input("modal-direction", "value"),
+    Input("modal-sl-pts", "value"),
+    Input("modal-tp-pts", "value"),
     State("bank-store", "data"),
     prevent_initial_call=True,
 )
-def on_chart_click(click, mode, bank):
-    if not mode or "on" not in mode or not click:
-        return no_update, no_update
-    pt = click["points"][0]
-    bank = bank or load_bank()
-    draft = make_draft(MARKET["df5"], pt["x"], pt["y"], bank["balance_eur"], bank["margin"])
-    return draft, True
+def toggle_trade_modal(open_clicks, cancel_clicks, save_clicks, entry, direction, sl_pts, tp_pts, bank):
+    tid = ctx.triggered_id
+    if tid == "modal-cancel" or tid == "modal-save":
+        return MODAL_HIDE, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+    if tid == "new-trade-btn":
+        if MARKET is None:
+            return MODAL_HIDE, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+        bank = bank or load_bank()
+        entry = float(MARKET["df5"].iloc[-1]["Close"])
+        preview = _modal_preview(entry, "long", 30, 60)
+        return MODAL_SHOW, entry, "long", 30, 60, bank["balance_eur"], bank["margin"], preview
+    preview = _modal_preview(entry, direction, sl_pts, tp_pts)
+    return no_update, no_update, no_update, no_update, no_update, no_update, no_update, preview
 
 
 @app.callback(
-    Output("draft-trade", "data", allow_duplicate=True),
-    Input("inp-sl", "value"), Input("inp-tp", "value"),
-    Input("inp-size", "value"), Input("inp-margin", "value"),
-    State("draft-trade", "data"),
+    Output("trades-store", "data", allow_duplicate=True),
+    Output("bank-store", "data", allow_duplicate=True),
+    Output("trades-table", "children", allow_duplicate=True),
+    Output("bank-badge", "children", allow_duplicate=True),
+    Output("bank-tab-info", "children", allow_duplicate=True),
+    Input("modal-save", "n_clicks"),
+    State("modal-direction", "value"),
+    State("modal-sl-pts", "value"),
+    State("modal-tp-pts", "value"),
+    State("modal-size", "value"),
+    State("modal-margin", "value"),
     prevent_initial_call=True,
 )
-def sync_draft_inputs(sl, tp, size, margin, draft):
-    if not draft or not draft.get("active"):
-        return no_update
-    d = update_draft_levels(draft, sl=float(sl) if sl is not None else None,
-                            tp=float(tp) if tp is not None else None)
-    if size is not None:
-        d["size_eur"] = float(size)
-    if margin is not None:
-        d["margin"] = int(margin)
-    return d
-
-
-@app.callback(
-    Output("trades-store", "data"),
-    Output("bank-store", "data"),
-    Output("draft-trade", "data", allow_duplicate=True),
-    Output("trade-expander", "open", allow_duplicate=True),
-    Output("trades-table", "children"),
-    Output("bank-badge", "children"),
-    Output("bank-tab-info", "children"),
-    Input("save-trade", "n_clicks"),
-    State("draft-trade", "data"),
-    State("inp-sl", "value"), State("inp-tp", "value"),
-    State("inp-size", "value"), State("inp-margin", "value"),
-    prevent_initial_call=True,
-)
-def save_trade_cb(n, draft, sl, tp, size, margin):
-    if not n or not draft or not draft.get("active"):
-        return (no_update,) * 7
-    d = update_draft_levels(draft, sl=float(sl), tp=float(tp))
-    d["size_eur"] = float(size or d["size_eur"])
-    d["margin"] = int(margin or d["margin"])
-    trades = add_trade(d, MARKET["df5"])
+def save_trade_modal(n, direction, sl_pts, tp_pts, size, margin):
+    if MARKET is None or not n or not direction or sl_pts is None or tp_pts is None:
+        return (no_update,) * 5
+    sl_pts, tp_pts = abs(float(sl_pts)), abs(float(tp_pts))
+    if sl_pts < 1 or tp_pts < 1:
+        return (no_update,) * 5
+    draft = make_draft_manual(
+        MARKET["df5"], direction, sl_pts, tp_pts,
+        float(size or load_bank()["balance_eur"]),
+        int(margin or load_bank()["margin"]),
+    )
+    trades = add_trade(draft, MARKET["df5"])
     bank = recalc(trades)
-    return trades, bank, {}, False, trades_table(trades), bank_panel(bank), bank_panel(bank)
-
-
-@app.callback(
-    Output("draft-trade", "data", allow_duplicate=True),
-    Output("trade-expander", "open", allow_duplicate=True),
-    Input("cancel-trade", "n_clicks"),
-    prevent_initial_call=True,
-)
-def cancel_trade(n):
-    return {}, False
+    panel = bank_panel(bank)
+    return trades, bank, trades_table(trades), panel, panel
 
 
 @app.callback(
@@ -419,51 +473,16 @@ def save_bank_cb(n, initial, risk, margin, trades):
     return bank, panel, panel
 
 
-@app.callback(Output("trade-form", "children"), Input("draft-trade", "data"))
-def refresh_trade_form(draft):
-    return trade_form(draft or {})
-
-
 clientside_callback(
     """function(_) {
         const gd = document.querySelector('#chart .js-plotly-plot');
         if (!gd) return window.dash_clientside.no_update;
-        const skip = n => !['session','lastprice','trade','draft','draft-sl','draft-tp'].includes(n);
+        const skip = n => !['timeline','session','lastprice','trade','draft','draft-sl','draft-tp'].includes(n);
         const sh = (gd.layout.shapes || []).filter(s => skip(s.name));
         const an = (gd.layout.annotations || []).filter(a => skip(a.name));
         return JSON.parse(JSON.stringify({shapes: sh, annotations: an}));
     }""",
     Output("store", "data"), Input("chart", "relayoutData"), prevent_initial_call=True)
-
-clientside_callback(
-    """function(rd, draft) {
-        if (!rd || !draft || !draft.active) return window.dash_clientside.no_update;
-        const gd = document.querySelector('#chart .js-plotly-plot');
-        if (!gd) return window.dash_clientside.no_update;
-        let sl = null, tp = null;
-        (gd.layout.shapes || []).forEach(function(s, i) {
-            const y0 = rd['shapes[' + i + '].y0'] ?? s.y0;
-            const y1 = rd['shapes[' + i + '].y1'] ?? s.y1;
-            if (s.name === 'draft-sl') sl = (y0 + y1) / 2;
-            if (s.name === 'draft-tp') tp = (y0 + y1) / 2;
-        });
-        if (sl === null && tp === null) return window.dash_clientside.no_update;
-        const d = Object.assign({}, draft);
-        if (sl !== null) {
-            d.stop_loss = sl;
-            const diff = sl - d.entry_price;
-            d.sl_points = Math.round((d.direction === 'long' ? diff : -diff) * 100) / 100;
-        }
-        if (tp !== null) {
-            d.take_profit = tp;
-            const diff = tp - d.entry_price;
-            d.tp_points = Math.round((d.direction === 'long' ? diff : -diff) * 100) / 100;
-        }
-        return d;
-    }""",
-    Output("draft-trade", "data", allow_duplicate=True),
-    Input("chart", "relayoutData"), State("draft-trade", "data"),
-    prevent_initial_call=True)
 
 clientside_callback(
     """function(n, txt) {

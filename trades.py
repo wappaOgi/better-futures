@@ -60,6 +60,40 @@ def entry_from_click(df5: pd.DataFrame, click_x) -> tuple[pd.Timestamp, float, d
     return t, entry, candle_at(df5, t)
 
 
+def make_draft_manual(
+    df5: pd.DataFrame,
+    direction: str,
+    sl_pts_abs: float,
+    tp_pts_abs: float,
+    size_eur: float,
+    margin: int,
+) -> dict:
+    """Draft s trenutnom zatvarajućom cijenom kao entry; SL/TP u apsolutnim bodovima."""
+    opened_at = df5.index[-1]
+    entry = float(df5.iloc[-1]["Close"])
+    candle = candle_at(df5, opened_at)
+    sl_dist, tp_dist = abs(float(sl_pts_abs)), abs(float(tp_pts_abs))
+    if direction == "long":
+        sl, tp = entry - sl_dist, entry + tp_dist
+    else:
+        sl, tp = entry + sl_dist, entry - tp_dist
+    bank = load_bank()
+    return {
+        "active": True,
+        "opened_at": str(opened_at),
+        "direction": direction,
+        "entry_price": entry,
+        "stop_loss": sl,
+        "take_profit": tp,
+        "sl_points": pts(entry, sl, direction),
+        "tp_points": pts(entry, tp, direction),
+        "size_eur": size_eur,
+        "margin": margin,
+        "risk_eur": risk_eur(bank),
+        "candle": candle,
+    }
+
+
 def make_draft(df5: pd.DataFrame, click_x, click_y, size_eur: float, margin: int) -> dict:
     opened_at, entry, candle = entry_from_click(df5, click_x)
     direction = "long" if float(click_y) >= entry else "short"

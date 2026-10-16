@@ -20,12 +20,12 @@ WINDOWS = [
     ("open1h", "09:30", "10:30"),
 ]
 
-# boja, alpha trake na vremenskoj liniji, alpha pozadine grafa
+# boja, alpha trake na vremenskoj liniji (samo dolje, ispod grafa)
 STYLE = {
-    "asia": ("#9575cd", 0.45, 0.035),
-    "london": ("#ffb74d", 0.50, 0.04),
-    "ny": ("#4fc3f7", 0.45, 0.035),
-    "open1h": ("#ffeb3b", 0.70, 0.08),
+    "asia": ("#9575cd", 0.55),
+    "london": ("#ffb74d", 0.60),
+    "ny": ("#4fc3f7", 0.55),
+    "open1h": ("#ffeb3b", 0.75),
 }
 
 LABELS = {"asia": "Asia", "london": "London", "ny": "NY", "open1h": "Open 1h"}
@@ -54,7 +54,7 @@ def _et_window(day: pd.Timestamp, start: str, end: str) -> tuple[pd.Timestamp, p
 
 
 def overlays(t_start: pd.Timestamp, t_end: pd.Timestamp) -> tuple[list, list]:
-    """Vrect trake + kratke oznake na vremenskoj liniji."""
+    """Samo traka uz dno (x-os), bez overlaya iznad candlestickova."""
     shapes, annotations = [], []
     z0 = pd.Timestamp(t_start).tz_localize(DISPLAY).tz_convert(MARKET)
     z1 = pd.Timestamp(t_end).tz_localize(DISPLAY).tz_convert(MARKET)
@@ -65,28 +65,25 @@ def overlays(t_start: pd.Timestamp, t_end: pd.Timestamp) -> tuple[list, list]:
         if day.weekday() == 5:  # subota — CME ne trguje
             day += pd.Timedelta(days=1)
             continue
+        day_x0, day_x1 = None, None
         for sid, start, end in WINDOWS:
             if day.weekday() == 6 and sid != "asia":  # nedjelja: samo večernji Asia open
                 continue
             x0, x1 = _et_window(day, start, end)
             if x1 < t_start or x0 > t_end:
                 continue
-            col, strip_a, bg_a = STYLE[sid]
+            day_x0 = x0 if day_x0 is None else min(day_x0, x0)
+            day_x1 = x1 if day_x1 is None else max(day_x1, x1)
+            col, strip_a = STYLE[sid]
             shapes.append(dict(
                 type="rect", xref="x", yref="paper", x0=x0, x1=x1,
-                y0=0, y1=0.04, fillcolor=_rgba(col, strip_a), line_width=0,
+                y0=0.048, y1=0.066, fillcolor=_rgba(col, strip_a), line_width=0,
                 layer="below", name="session",
             ))
-            if bg_a:
-                shapes.append(dict(
-                    type="rect", xref="x", yref="paper", x0=x0, x1=x1,
-                    y0=0.04, y1=1, fillcolor=_rgba(col, bg_a), line_width=0,
-                    layer="below", name="session",
-                ))
             if (x1 - x0) > pd.Timedelta(minutes=50):
                 annotations.append(dict(
-                    x=x0 + (x1 - x0) / 2, y=0.02, xref="x", yref="paper",
-                    text=LABELS[sid], showarrow=False, xanchor="center",
+                    x=x0 + (x1 - x0) / 2, y=0.057, xref="x", yref="paper",
+                    text=LABELS[sid], showarrow=False, xanchor="center", yanchor="middle",
                     font=dict(size=8, color=col), name="session",
                 ))
         day += pd.Timedelta(days=1)
