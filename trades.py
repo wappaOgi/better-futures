@@ -21,10 +21,15 @@ def save(trades: list) -> None:
     FILE.write_text(json.dumps(trades, indent=2, default=str))
 
 
+def sort_by_opened(trades: list, newest_first: bool = True) -> list:
+    return sorted(trades, key=lambda t: pd.Timestamp(t["opened_at"]), reverse=newest_first)
+
+
 def commit(trades: list, df5: pd.DataFrame | None = None) -> list:
     """Spremi u trades.json, ažuriraj banku, vrati svježu listu s diska."""
     if df5 is not None:
         trades = resolve_all(trades, df5)
+    trades = sort_by_opened(trades)
     save(trades)
     recalc(trades)
     return load()

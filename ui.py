@@ -10,7 +10,8 @@ from timelines import overlays as timeline_overlays
 from trades import (
     FILE as TRADES_FILE,
     add_trade, chart_overlays, delete_trade, get as get_trade, load as load_trades,
-    make_draft_manual, resolve_all, save as save_trades, seed_test_trades, update_trade,
+    make_draft_manual, resolve_all, save as save_trades, seed_test_trades, sort_by_opened,
+    update_trade,
 )
 from trend import analyze, trend_overlays
 from zones import get_zones
@@ -41,13 +42,21 @@ MODAL_BOX = {
 }
 MODAL_ROW = {"marginBottom": "12px"}
 MODAL_LBL = {"display": "block", "color": "#aaa", "fontSize": "12px", "marginBottom": "4px"}
+FAVORITE_TICKERS = [
+    {"label": "MNQ · Nasdaq Micro", "value": "MNQ=F"},
+    {"label": "MES · S&P Micro", "value": "MES=F"},
+    {"label": "GC · Gold", "value": "GC=F"},
+    {"label": "CL · Oil", "value": "CL=F"},
+    {"label": "NG · Gas", "value": "NG=F"},
+]
+OTHER_TICKERS = [
+    {"label": "NQ · Nasdaq", "value": "NQ=F"},
+    {"label": "ES · S&P", "value": "ES=F"},
+    {"label": "MYM · Dow Micro", "value": "MYM=F"},
+]
 TICKER_OPTS = [
-    {"label": "MNQ", "value": "MNQ=F"},
-    {"label": "NQ", "value": "NQ=F"},
-    {"label": "MES", "value": "MES=F"},
-    {"label": "ES", "value": "ES=F"},
-    {"label": "MYM", "value": "MYM=F"},
-    {"label": "GC", "value": "GC=F"},
+    {"label": "★ Favoriti", "options": FAVORITE_TICKERS},
+    {"label": "Ostali", "options": OTHER_TICKERS},
 ]
 
 
@@ -200,22 +209,22 @@ def trades_table(trades):
     if not trades:
         return html.P("Nema trejdova.", style={"color": "#888"})
     header = html.Tr([html.Th(c) for c in
-                      ["ID", "Test", "Dir", "Entry", "SL pts", "TP pts", "Status", "PnL pts", "PnL €", "Datum", ""]])
+                      ["Datum", "ID", "Test", "Dir", "Entry", "SL pts", "TP pts", "Status", "PnL pts", "PnL €", ""]])
     rows = []
-    for t in sorted(trades, key=lambda x: x["opened_at"], reverse=True):
+    for t in sort_by_opened(trades):
         st = t.get("status", "open")
         col = GREEN if st == "win" else RED if st == "loss" else "#aaa"
         pnl_pts = t.get("pnl_points")
         pnl_e = t.get("pnl_eur")
         tid = t["id"]
         rows.append(html.Tr([
+            html.Td(t["opened_at"][:16], style={"whiteSpace": "nowrap"}),
             html.Td(tid), html.Td("✓" if t.get("test") else ""),
             html.Td(t["direction"]), html.Td(f"{t['entry_price']:.2f}"),
             html.Td(f"{abs(t['sl_points']):.0f}"), html.Td(f"{abs(t['tp_points']):.0f}"),
             html.Td(st, style={"color": col}),
             html.Td(f"{pnl_pts:.0f}" if pnl_pts is not None else "—"),
             html.Td(f"{pnl_e:.2f}" if pnl_e is not None else "—", style={"color": col}),
-            html.Td(t["opened_at"][:16]),
             html.Td([
                 html.Button("Uredi", id={"type": "edit-trade", "index": tid}, n_clicks=0,
                             style={**BTN_SM, "background": "#444", "color": "#ccc"}),
@@ -352,7 +361,7 @@ app.layout = html.Div(
             dcc.Tab(label="Graf", value="Graf", children=[
                 html.Div(style=BAR, children=[
                     dcc.Dropdown(id="ticker", value=DEFAULT_TICKER, options=TICKER_OPTS,
-                                 clearable=False, style={"width": "100px"}),
+                                 clearable=False, style={"width": "168px"}),
                     dcc.Input(id="days", type="number", value=5, min=1, max=60, style={"width": "52px"}),
                     html.Label(" dana ", style={"marginRight": "8px"}),
                     html.Button("Učitaj", id="load-data", n_clicks=0,
@@ -578,9 +587,9 @@ def save_bank_cb(n, initial, risk, margin, trades):
 def _trade_refresh(df5=None):
     """Učitaj trejdove iz trades.json i osvježi UI."""
     global TRADES, BANK
-    TRADES = load_trades()
+    TRADES = sort_by_opened(load_trades())
     if df5 is not None and TRADES:
-        TRADES = resolve_all(TRADES, df5)
+        TRADES = sort_by_opened(resolve_all(TRADES, df5))
         save_trades(TRADES)
     BANK = recalc(TRADES)
     panel = bank_panel(BANK)
