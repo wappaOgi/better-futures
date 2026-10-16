@@ -12,7 +12,7 @@ from trades import (
     add_trade, chart_overlays, delete_trade, get as get_trade, load as load_trades,
     make_draft_manual, resolve_all, save as save_trades, seed_test_trades, update_trade,
 )
-from trend import analyze
+from trend import analyze, trend_overlays
 from zones import get_zones
 
 GREEN, RED, AMBER = "#26a69a", "#ef5350", "#ffc107"
@@ -112,8 +112,10 @@ def build_fig(market, tf, layers, store, trades):
                 hoveron="fills", hoverinfo="text", showlegend=False,
                 text=f"{z.kind} {z.low:.2f} - {z.high:.2f} ({z.touches} dodira)"))
 
+    trend_shapes, trend_ann = [], []
     if "swings" in layers:
-        sw = trend[tf]["swings"].dropna(subset=["label"])
+        sw_full = trend[tf]["swings"]
+        sw = sw_full.dropna(subset=["label"])
         for kind, pos, sym in (("H", "top center", "triangle-down"), ("L", "bottom center", "triangle-up")):
             s = sw[sw["kind"] == kind]
             cols = [GREEN if lb in ("HH", "HL") else RED if lb in ("LH", "LL") else "#9e9e9e" for lb in s["label"]]
@@ -121,6 +123,7 @@ def build_fig(market, tf, layers, store, trades):
                 x=s.index, y=s["price"], mode="markers+text", text=s["label"],
                 textposition=pos, textfont=dict(color=cols, size=11),
                 marker=dict(symbol=sym, size=6, color=cols), hoverinfo="skip", showlegend=False))
+        trend_shapes, trend_ann = trend_overlays(sw_full, x_end)
 
     last = df.iloc[-1]
     last_close = float(last["Close"])
@@ -159,8 +162,8 @@ def build_fig(market, tf, layers, store, trades):
         yaxis=dict(side="right", fixedrange=False, gridcolor="#22252b",
                    tickformat=".2f", showexponent="none"),
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
-        shapes=tl_shapes + sess_shapes + trade_shapes + [price_line] + store.get("shapes", []),
-        annotations=tl_ann + sess_ann + trade_ann + [price_ann] + store.get("annotations", []),
+        shapes=tl_shapes + sess_shapes + trend_shapes + trade_shapes + [price_line] + store.get("shapes", []),
+        annotations=tl_ann + sess_ann + trend_ann + trade_ann + [price_ann] + store.get("annotations", []),
     )
     return fig
 
@@ -704,7 +707,7 @@ clientside_callback(
     """function(_) {
         const gd = document.querySelector('#chart .js-plotly-plot');
         if (!gd) return window.dash_clientside.no_update;
-        const skip = n => !['timeline','session','lastprice','trade','draft','draft-sl','draft-tp'].includes(n);
+        const skip = n => !['timeline','session','trendstrip','lastprice','trade','draft','draft-sl','draft-tp'].includes(n);
         const sh = (gd.layout.shapes || []).filter(s => skip(s.name));
         const an = (gd.layout.annotations || []).filter(a => skip(a.name));
         return JSON.parse(JSON.stringify({shapes: sh, annotations: an}));
