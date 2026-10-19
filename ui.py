@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, clientside_callback, ctx, dcc, html, no_update
 
 from bank import load as load_bank, recalc, risk_eur, save as save_bank, update_settings
+from atr import PERIOD as ATR_PERIOD, last as last_atr, series as atr_series, suggest_sl
 from data import DEFAULT_TICKER, cache_path, clear_cache, load_5m, resample
 from sessions import overlays as session_overlays
 from timelines import overlays as timeline_overlays
@@ -72,6 +73,7 @@ def build_market(ticker: str, days: int) -> dict:
         "data": data,
         "zones": get_zones(df5),
         "trend": {tf: analyze(df5, tf, n=SWING_N[tf]) for tf in data},
+        "atr": {tf: last_atr(data[tf], ATR_PERIOD) for tf in data},
         "gaps": gaps,
     }
 
@@ -160,7 +162,26 @@ def build_fig(market, tf, layers, store, trades):
             trade_shapes.extend(sh)
             trade_ann.extend(an)
 
+    atr_s = atr_series(df, ATR_PERIOD).dropna().tail(ATR_PERIOD)
+    if len(atr_s) >= 2:
+        fig.add_trace(go.Scatter(
+            x=atr_s.index, y=atr_s.values, mode="lines",
+            line=dict(color="#ba68c8", width=1.5), name="atr",
+            yaxis="y2", hovertemplate="ATR: %{y:.2f} pts<extra></extra>", showlegend=False,
+        ))
+
     x_start = df5.index[-1] - pd.Timedelta(days=view_days)
+    yaxis = dict(side="right", fixedrange=False, gridcolor="#22252b",
+                 tickformat=".2f", showexponent="none")
+    layout_extra = {}
+    if len(atr_s) >= 2:
+        yaxis["domain"] = [0.22, 1.0]
+        layout_extra["yaxis2"] = dict(
+            title=dict(text=f"ATR({ATR_PERIOD})", font=dict(size=10, color="#ba68c8")),
+            domain=[0.08, 0.18], anchor="x", overlaying=None, side="right",
+            showgrid=True, gridcolor="#22252b", tickformat=".1f", fixedrange=True,
+            zeroline=False,
+        )
     fig.update_layout(
         template="plotly_dark", paper_bgcolor="#14161a", plot_bgcolor="#14161a",
         margin=dict(l=8, r=72, t=8, b=62), dragmode="pan", uirevision="keep",
@@ -168,8 +189,8 @@ def build_fig(market, tf, layers, store, trades):
                    range=[x_start, df5.index[-1] + pd.Timedelta(hours=2)],
                    tickformatstops=X_TICKS, rangebreaks=[dict(values=gaps, dvalue=3_600_000)],
                    gridcolor="#22252b"),
-        yaxis=dict(side="right", fixedrange=False, gridcolor="#22252b",
-                   tickformat=".2f", showexponent="none"),
+        yaxis=yaxis,
+        **layout_extra,
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
         shapes=tl_shapes + sess_shapes + trend_shapes + trade_shapes + [price_line] + store.get("shapes", []),
         annotations=tl_ann + sess_ann + trend_ann + trade_ann + [price_ann] + store.get("annotations", []),
@@ -177,15 +198,19 @@ def build_fig(market, tf, layers, store, trades):
     return fig
 
 
-def trend_badges(trend):
+def trend_badges(trend, atr_map=None, tf="5min"):
     out = []
-    for tf, r in trend.items():
+    for tframe, r in trend.items():
         arrow = {"UP": "▲", "DOWN": "▼", "RANGE": "◆"}[r["trend"]]
         col = {"UP": GREEN, "DOWN": RED, "RANGE": AMBER}[r["trend"]]
-        txt = f"{tf}: {arrow} {r['trend']}"
+        txt = f"{tframe}: {arrow} {r['trend']}"
         if r["invalidation"] is not None:
             txt += f" · invalidacija {r['invalidation']:.2f}" + (" (probijena)" if r["broken"] else "")
         out.append(html.Span(txt, style={"color": col, "marginRight": "18px"}))
+    if atr_map:
+        v = atr_map.get(tf)
+        if v is not None:
+            out.append(html.Span(f"ATR({ATR_PERIOD}): {v:.1f} pts", style={"color": "#ba68c8", "marginRight": "18px"}))
     return out
 
 
@@ -306,6 +331,7 @@ def trade_modal():
                 html.Label("Stop loss (bodovi)", style=MODAL_LBL),
                 dcc.Input(id="modal-sl-pts", type="number", value=30, min=1, style={**INP, "width": "100%"}),
             ]),
+            html.Div(id="modal-sl-hint", style={"color": "#ba68c8", "fontSize": "12px", "margin": "-4px 0 8px"}),
             html.Div(style=MODAL_ROW, children=[
                 html.Label("Take profit (bodovi)", style=MODAL_LBL),
                 dcc.Input(id="modal-tp-pts", type="number", value=60, min=1, style={**INP, "width": "100%"}),
@@ -486,10 +512,21 @@ def update_chart(meta, tf, layers, trades, store):
         return empty_fig(), html.Span("—", style={"color": "#666"})
     if meta.get("status") == "error":
         return empty_fig(meta.get("msg", "Greška")), html.Span(meta.get("msg", "Greška"), style={"color": RED})
+    tf = tf or "5min"
     return (
         build_fig(MARKET, tf, layers or [], store or {}, trades or []),
-        trend_badges(MARKET["trend"]),
+        trend_badges(MARKET["trend"], MARKET.get("atr"), tf),
     )
+
+
+def _atr_suggest(tf: str) -> tuple[int, int, str]:
+    if MARKET is None:
+        return 30, 60, ""
+    df = MARKET["data"].get(tf or "5min", MARKET["df5"])
+    sl = suggest_sl(df, ATR_PERIOD)
+    v = last_atr(df, ATR_PERIOD)
+    hint = f"Sugestija SL: ATR({ATR_PERIOD}) = {v:.1f} pts" if v is not None else ""
+    return sl, sl * 2, hint
 
 
 def _modal_preview(entry, direction, sl_pts, tp_pts):
@@ -512,6 +549,7 @@ def _modal_preview(entry, direction, sl_pts, tp_pts):
     Output("modal-size", "value"),
     Output("modal-margin", "value"),
     Output("modal-preview", "children"),
+    Output("modal-sl-hint", "children"),
     Input("new-trade-btn", "n_clicks"),
     Input("modal-cancel", "n_clicks"),
     Input("modal-save", "n_clicks"),
@@ -520,21 +558,23 @@ def _modal_preview(entry, direction, sl_pts, tp_pts):
     Input("modal-sl-pts", "value"),
     Input("modal-tp-pts", "value"),
     State("bank-store", "data"),
+    State("tf", "value"),
     prevent_initial_call=True,
 )
-def toggle_trade_modal(open_clicks, cancel_clicks, save_clicks, entry, direction, sl_pts, tp_pts, bank):
+def toggle_trade_modal(open_clicks, cancel_clicks, save_clicks, entry, direction, sl_pts, tp_pts, bank, tf):
     tid = ctx.triggered_id
     if tid == "modal-cancel" or tid == "modal-save":
-        return MODAL_HIDE, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+        return MODAL_HIDE, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
     if tid == "new-trade-btn":
         if MARKET is None:
-            return MODAL_HIDE, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+            return MODAL_HIDE, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         bank = bank or load_bank()
         entry = float(MARKET["df5"].iloc[-1]["Close"])
-        preview = _modal_preview(entry, "long", 30, 60)
-        return MODAL_SHOW, entry, "long", 30, 60, bank["balance_eur"], bank["margin"], preview
+        sl, tp, hint = _atr_suggest(tf)
+        preview = _modal_preview(entry, "long", sl, tp)
+        return MODAL_SHOW, entry, "long", sl, tp, bank["balance_eur"], bank["margin"], preview, hint
     preview = _modal_preview(entry, direction, sl_pts, tp_pts)
-    return no_update, no_update, no_update, no_update, no_update, no_update, no_update, preview
+    return no_update, no_update, no_update, no_update, no_update, no_update, no_update, preview, no_update
 
 
 @app.callback(
