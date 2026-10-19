@@ -1,6 +1,4 @@
 """Dohvat 5m podataka (yfinance) + resampling u veće timeframe-ove."""
-from pathlib import Path
-
 import pandas as pd
 import yfinance as yf
 
@@ -9,19 +7,12 @@ TZ = "Europe/Zagreb"
 CACHE_TZ = "America/New_York"
 OHLCV = {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
 
-
-def cache_path(ticker: str) -> Path:
-    safe = "".join(c if c.isalnum() else "_" for c in ticker).strip("_") or "ticker"
-    return Path(__file__).with_name(f"{safe}_5m.csv")
+# RAM cache: ticker -> puni 5m DataFrame za sesiju
+_MEMORY: dict[str, pd.DataFrame] = {}
 
 
-def clear_cache(ticker: str) -> bool:
-    """Obriši lokalni CSV cache za ticker. Vraća True ako je datoteka obrisana."""
-    path = cache_path(ticker)
-    if path.exists():
-        path.unlink()
-        return True
-    return False
+def memory_tickers() -> list[str]:
+    return list(_MEMORY.keys())
 
 
 def _to_zagreb(df: pd.DataFrame) -> pd.DataFrame:
@@ -43,27 +34,11 @@ def fetch_5m(ticker: str, period: str) -> pd.DataFrame:
 
 
 def load_5m(ticker: str = DEFAULT_TICKER, days: int = 5) -> pd.DataFrame:
-    """Povuče podatke za ticker i vrati zadnjih `days` dana (5m max ~60d na Yahoo)."""
+    """Povuče podatke za ticker, spremi u RAM i vrati zadnjih `days` dana."""
     days = max(1, min(int(days), 60))
-    cache = cache_path(ticker)
     fetch_days = min(max(days + 5, 7), 60)
-    period = f"{fetch_days}d"
-
-    old = pd.read_csv(cache, index_col=0, parse_dates=True) if cache.exists() else None
-    if old is not None:
-        old = _to_zagreb(old)
-    try:
-        new = fetch_5m(ticker, period)
-    except Exception as e:
-        if old is None:
-            raise
-        print(f"yfinance greška ({e}), koristim cache")
-        df = old
-    else:
-        df = pd.concat([old, new]) if old is not None else new
-        df = df[~df.index.duplicated(keep="last")].sort_index()
-        df.to_csv(cache)
-
+    df = fetch_5m(ticker, f"{fetch_days}d")
+    _MEMORY[ticker] = df
     cutoff = df.index[-1] - pd.Timedelta(days=days)
     return df[df.index >= cutoff]
 

@@ -6,15 +6,27 @@ from pathlib import Path
 import pandas as pd
 
 from bank import load as load_bank, risk_eur, recalc
+from data import DEFAULT_TICKER
 
 FILE = Path(__file__).with_name("trades.json")
 GREEN, RED, BLUE, AMBER = "#26a69a", "#ef5350", "#42a5f5", "#ffc107"
 
 
+def trade_ticker(trade: dict) -> str:
+    return trade.get("ticker") or DEFAULT_TICKER
+
+
+def for_ticker(trades: list, ticker: str) -> list:
+    return [t for t in trades if trade_ticker(t) == ticker]
+
+
 def load() -> list:
-    if FILE.exists():
-        return json.loads(FILE.read_text())
-    return []
+    if not FILE.exists():
+        return []
+    trades = json.loads(FILE.read_text())
+    for t in trades:
+        t.setdefault("ticker", DEFAULT_TICKER)
+    return trades
 
 
 def save(trades: list) -> None:
@@ -25,10 +37,10 @@ def sort_by_opened(trades: list, newest_first: bool = True) -> list:
     return sorted(trades, key=lambda t: pd.Timestamp(t["opened_at"]), reverse=newest_first)
 
 
-def commit(trades: list, df5: pd.DataFrame | None = None) -> list:
+def commit(trades: list, df5: pd.DataFrame | None = None, ticker: str | None = None) -> list:
     """Spremi u trades.json, ažuriraj banku, vrati svježu listu s diska."""
-    if df5 is not None:
-        trades = resolve_all(trades, df5)
+    if df5 is not None and ticker is not None:
+        trades = resolve_all(trades, df5, ticker)
     trades = sort_by_opened(trades)
     save(trades)
     recalc(trades)
@@ -94,6 +106,7 @@ def make_draft_manual(
     tp_pts_abs: float,
     size_eur: float,
     margin: int,
+    ticker: str = DEFAULT_TICKER,
 ) -> dict:
     """Draft s trenutnom zatvarajućom cijenom kao entry; SL/TP u apsolutnim bodovima."""
     opened_at = df5.index[-1]
@@ -118,10 +131,11 @@ def make_draft_manual(
         "margin": margin,
         "risk_eur": risk_eur(bank),
         "candle": candle,
+        "ticker": ticker,
     }
 
 
-def make_draft(df5: pd.DataFrame, click_x, click_y, size_eur: float, margin: int) -> dict:
+def make_draft(df5: pd.DataFrame, click_x, click_y, size_eur: float, margin: int, ticker: str = DEFAULT_TICKER) -> dict:
     opened_at, entry, candle = entry_from_click(df5, click_x)
     direction = "long" if float(click_y) >= entry else "short"
     sl_dist, tp_dist = 30.0, 60.0
@@ -143,6 +157,7 @@ def make_draft(df5: pd.DataFrame, click_x, click_y, size_eur: float, margin: int
         "margin": margin,
         "risk_eur": risk_eur(bank),
         "candle": candle,
+        "ticker": ticker,
     }
 
 
@@ -150,6 +165,7 @@ def from_draft(draft: dict, test: bool = False) -> dict:
     bank = load_bank()
     return {
         "id": str(uuid.uuid4())[:8],
+        "ticker": draft.get("ticker", DEFAULT_TICKER),
         "test": test,
         "status": "open",
         "opened_at": draft["opened_at"],
@@ -212,16 +228,19 @@ def _close(trade: dict, status: str, exit_price: float, closed_at, df5: pd.DataF
     return t
 
 
-def resolve_all(trades: list, df5: pd.DataFrame) -> list:
-    return [resolve_one(t, df5) for t in trades]
+def resolve_all(trades: list, df5: pd.DataFrame, ticker: str | None = None) -> list:
+    if ticker is None:
+        return [resolve_one(t, df5) for t in trades]
+    return [resolve_one(t, df5) if trade_ticker(t) == ticker else t for t in trades]
 
 
-def add_trade(draft: dict, df5: pd.DataFrame | None = None) -> list:
+def add_trade(draft: dict, df5: pd.DataFrame | None = None, ticker: str | None = None) -> list:
     trades = load()
+    tkr = ticker or draft.get("ticker") or DEFAULT_TICKER
     if df5 is not None:
-        trades = resolve_all(trades, df5)
+        trades = resolve_all(trades, df5, tkr)
     trades.append(from_draft(draft))
-    return commit(trades, df5)
+    return commit(trades, df5, tkr)
 
 
 def update_trade(
@@ -258,15 +277,15 @@ def update_trade(
         "pnl_eur": None,
     })
     trades[idx] = t
-    return commit(trades, df5)
+    return commit(trades, df5, trade_ticker(trades[idx]) if idx is not None else None)
 
 
-def delete_trade(trade_id: str, df5: pd.DataFrame | None = None) -> list:
+def delete_trade(trade_id: str, df5: pd.DataFrame | None = None, ticker: str | None = None) -> list:
     trades = [t for t in load() if t["id"] != trade_id]
-    return commit(trades, df5)
+    return commit(trades, df5, ticker)
 
 
-def seed_test_trades(df5: pd.DataFrame) -> list:
+def seed_test_trades(df5: pd.DataFrame, ticker: str = DEFAULT_TICKER) -> list:
     trades = []
     bank = load_bank()
     days = sorted({t.date() for t in df5.index})[-5:]
@@ -289,6 +308,7 @@ def seed_test_trades(df5: pd.DataFrame) -> list:
         }
         trades.append({
             "id": f"test{i+1}",
+            "ticker": ticker,
             "test": True,
             "status": "open",
             "opened_at": str(ts),
@@ -308,7 +328,7 @@ def seed_test_trades(df5: pd.DataFrame) -> list:
             "pnl_eur": None,
         })
 
-    return commit(trades, df5)
+    return commit(trades, df5, ticker)
 
 
 def _rgba(color: str, a: float) -> str:

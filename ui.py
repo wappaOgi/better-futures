@@ -5,14 +5,14 @@ from dash import ALL, Dash, Input, Output, State, clientside_callback, ctx, dcc,
 
 from bank import load as load_bank, recalc, risk_eur, save as save_bank, update_settings
 from atr import PERIOD as ATR_PERIOD, last as last_atr, series as atr_series, suggest_sl
-from data import DEFAULT_TICKER, cache_path, clear_cache, load_5m, resample
+from data import DEFAULT_TICKER, load_5m, resample
 from sessions import overlays as session_overlays
 from timelines import overlays as timeline_overlays
 from trades import (
     FILE as TRADES_FILE,
-    add_trade, chart_overlays, delete_trade, get as get_trade, load as load_trades,
+    add_trade, chart_overlays, delete_trade, for_ticker, get as get_trade, load as load_trades,
     make_draft_manual, resolve_all, save as save_trades, seed_test_trades, sort_by_opened,
-    update_trade,
+    trade_ticker, update_trade,
 )
 from trend import analyze, trend_overlays
 from zones import get_zones
@@ -29,21 +29,15 @@ X_TICKS = [
 ]
 MODAL_HIDE = "modal-backdrop is-hidden"
 MODAL_SHOW = "modal-backdrop"
-FAVORITE_TICKERS = [
+TICKER_OPTS = [
     {"label": "MNQ · Nasdaq Micro", "value": "MNQ=F"},
     {"label": "MES · S&P Micro", "value": "MES=F"},
     {"label": "GC · Gold", "value": "GC=F"},
     {"label": "CL · Oil", "value": "CL=F"},
     {"label": "NG · Gas", "value": "NG=F"},
-]
-OTHER_TICKERS = [
     {"label": "NQ · Nasdaq", "value": "NQ=F"},
     {"label": "ES · S&P", "value": "ES=F"},
     {"label": "MYM · Dow Micro", "value": "MYM=F"},
-]
-TICKER_OPTS = [
-    {"label": "★ Favoriti", "options": FAVORITE_TICKERS},
-    {"label": "Ostali", "options": OTHER_TICKERS},
 ]
 
 
@@ -143,7 +137,8 @@ def build_fig(market, tf, layers, store, trades):
 
     trade_shapes, trade_ann = [], []
     if "trades" in layers:
-        for t in trades:
+        chart_trades = for_ticker(trades or [], market["ticker"])
+        for t in chart_trades:
             sh, an = chart_overlays(t, x_end)
             trade_shapes.extend(sh)
             trade_ann.extend(an)
@@ -212,11 +207,15 @@ def bank_panel(bank):
     ])
 
 
+def _ticker_label(ticker: str) -> str:
+    return (ticker or DEFAULT_TICKER).split("=")[0]
+
+
 def trades_table(trades):
     if not trades:
         return html.P("Nema trejdova.", className="empty-state")
     header = html.Tr([html.Th(c) for c in
-                      ["Datum", "ID", "Test", "Dir", "Entry", "SL pts", "TP pts", "Status", "PnL pts", "PnL €", ""]])
+                      ["Datum", "Ticker", "ID", "Test", "Dir", "Entry", "SL pts", "TP pts", "Status", "PnL pts", "PnL €", ""]])
     rows = []
     for t in sort_by_opened(trades):
         st = t.get("status", "open")
@@ -226,6 +225,7 @@ def trades_table(trades):
         tid = t["id"]
         rows.append(html.Tr([
             html.Td(t["opened_at"][:16], className="cell-nowrap"),
+            html.Td(_ticker_label(trade_ticker(t)), className="cell-nowrap"),
             html.Td(tid), html.Td("✓" if t.get("test") else ""),
             html.Td(t["direction"]), html.Td(f"{t['entry_price']:.2f}"),
             html.Td(f"{abs(t['sl_points']):.0f}"), html.Td(f"{abs(t['tp_points']):.0f}"),
@@ -336,14 +336,6 @@ CONFIG = {
 ITEM = {"marginRight": "12px", "display": "inline-block"}
 
 
-def cache_badge(ticker: str) -> html.Span:
-    path = cache_path(ticker or DEFAULT_TICKER)
-    if path.exists():
-        kb = path.stat().st_size // 1024
-        return html.Span(f"cache: {path.name} ({kb} KB)", className="cache-badge")
-    return html.Span("nema cachea", className="cache-badge text-subtle")
-
-
 app = Dash(__name__)
 app.layout = html.Div(
     className="app-shell",
@@ -363,9 +355,6 @@ app.layout = html.Div(
                         html.Label("dana", className="toolbar__label"),
                     ]),
                     html.Button("Učitaj", id="load-data", n_clicks=0, className="btn btn--primary"),
-                    html.Button("×", id="clear-cache", n_clicks=0, title="Obriši CSV cache",
-                                className="btn btn--danger btn--icon"),
-                    html.Span(id="cache-badge", children=cache_badge(DEFAULT_TICKER)),
                     dcc.RadioItems(id="tf", value="5min", labelStyle=ITEM,
                                    options=[{"label": "5 min", "value": "5min"}, {"label": "1 h", "value": "1h"}]),
                     dcc.Checklist(id="layers", value=["zones", "swings", "sessions", "trades"], labelStyle=ITEM,
@@ -414,31 +403,6 @@ app.layout = html.Div(
 
 
 @app.callback(
-    Output("cache-badge", "children"),
-    Input("ticker", "value"),
-    Input("clear-cache", "n_clicks"),
-    Input("load-data", "n_clicks"),
-)
-def update_cache_badge(ticker, *_):
-    return cache_badge(ticker or DEFAULT_TICKER)
-
-
-@app.callback(
-    Output("market-store", "data", allow_duplicate=True),
-    Input("clear-cache", "n_clicks"),
-    State("ticker", "value"),
-    prevent_initial_call=True,
-)
-def delete_cache(_, ticker):
-    global MARKET
-    if not _:
-        return no_update
-    clear_cache(ticker or DEFAULT_TICKER)
-    MARKET = None
-    return {"status": "idle"}
-
-
-@app.callback(
     Output("market-store", "data"),
     Output("trades-store", "data"),
     Output("bank-store", "data"),
@@ -446,22 +410,22 @@ def delete_cache(_, ticker):
     Output("bank-tab-info", "children"),
     Output("trades-table", "children"),
     Input("load-data", "n_clicks"),
-    State("ticker", "value"),
+    Input("ticker", "value"),
     State("days", "value"),
     prevent_initial_call=True,
 )
 def reload_market(_, ticker, days):
     global MARKET, TRADES, BANK
-    if not _:
+    if ctx.triggered_id == "load-data" and not _:
         return (no_update,) * 6
     ticker = ticker or DEFAULT_TICKER
     days = max(1, min(int(days or 5), 60))
     try:
         MARKET = build_market(ticker, days)
         if not TRADES_FILE.exists():
-            TRADES = seed_test_trades(MARKET["df5"])
+            TRADES = seed_test_trades(MARKET["df5"], ticker)
         else:
-            TRADES = resolve_all(load_trades(), MARKET["df5"])
+            TRADES = resolve_all(load_trades(), MARKET["df5"], ticker)
             save_trades(TRADES)
         BANK = recalc(TRADES)
         panel = bank_panel(BANK)
@@ -571,13 +535,15 @@ def save_trade_modal(n, direction, sl_pts, tp_pts, size, margin):
     sl_pts, tp_pts = abs(float(sl_pts)), abs(float(tp_pts))
     if sl_pts < 1 or tp_pts < 1:
         return (no_update,) * 5
+    ticker = MARKET["ticker"]
     draft = make_draft_manual(
         MARKET["df5"], direction, sl_pts, tp_pts,
         float(size or load_bank()["balance_eur"]),
         int(margin or load_bank()["margin"]),
+        ticker=ticker,
     )
-    add_trade(draft, MARKET["df5"])
-    return _trade_refresh(MARKET["df5"])
+    add_trade(draft, MARKET["df5"], ticker)
+    return _trade_refresh(MARKET["df5"], ticker)
 
 
 @app.callback(
@@ -598,12 +564,12 @@ def save_bank_cb(n, initial, risk, margin, trades):
     return bank, panel, panel
 
 
-def _trade_refresh(df5=None):
+def _trade_refresh(df5=None, ticker=None):
     """Učitaj trejdove iz trades.json i osvježi UI."""
     global TRADES, BANK
     TRADES = sort_by_opened(load_trades())
-    if df5 is not None and TRADES:
-        TRADES = sort_by_opened(resolve_all(TRADES, df5))
+    if df5 is not None and TRADES and ticker:
+        TRADES = sort_by_opened(resolve_all(TRADES, df5, ticker))
         save_trades(TRADES)
     BANK = recalc(TRADES)
     panel = bank_panel(BANK)
@@ -677,6 +643,7 @@ def save_edit_trade(n, trade_id, entry, direction, sl_pts, tp_pts, size, margin)
     if sl_pts < 1 or tp_pts < 1:
         return (no_update,) * 5
     df5 = MARKET["df5"] if MARKET is not None else None
+    ticker = MARKET["ticker"] if MARKET is not None else None
     update_trade(
         trade_id,
         entry_price=float(entry),
@@ -687,7 +654,7 @@ def save_edit_trade(n, trade_id, entry, direction, sl_pts, tp_pts, size, margin)
         margin=int(margin or load_bank()["margin"]),
         df5=df5,
     )
-    return _trade_refresh(df5)
+    return _trade_refresh(df5, ticker)
 
 
 @app.callback(
@@ -706,8 +673,9 @@ def delete_trade_cb(clicks):
     if not isinstance(tid, dict) or tid.get("type") != "delete-trade":
         return (no_update,) * 5
     df5 = MARKET["df5"] if MARKET is not None else None
-    delete_trade(tid["index"], df5)
-    return _trade_refresh(df5)
+    ticker = MARKET["ticker"] if MARKET is not None else None
+    delete_trade(tid["index"], df5, ticker)
+    return _trade_refresh(df5, ticker)
 
 
 @app.callback(
@@ -723,7 +691,8 @@ def sync_trades_from_json(tab):
     if tab != "Trejdovi":
         return (no_update,) * 5
     df5 = MARKET["df5"] if MARKET is not None else None
-    return _trade_refresh(df5)
+    ticker = MARKET["ticker"] if MARKET is not None else None
+    return _trade_refresh(df5, ticker)
 
 
 clientside_callback(
