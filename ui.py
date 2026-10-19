@@ -19,7 +19,7 @@ from zones import get_zones
 
 GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
 CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
-SWING_N = {"5min": 6, "1h": 3}
+SWING_N = {"5min": 6, "1h": 3, "4h": 2}
 X_TICKS = [
     dict(dtickrange=[None, 600_000], value="%H:%M"),
     dict(dtickrange=[600_000, 3_600_000], value="%H:%M"),
@@ -43,9 +43,11 @@ TICKER_OPTS = [
 
 def build_market(ticker: str, days: int) -> dict:
     df5 = load_5m(ticker, days)
-    data = {"5min": df5, "1h": resample(df5, "1h")}
+    data = {"5min": df5, "1h": resample(df5, "1h"), "4h": resample(df5, "4h")}
     h1 = data["1h"].index
-    gaps = pd.date_range(h1[0], h1[-1], freq="1h").difference(h1).tolist() if len(h1) > 1 else []
+    gaps_1h = pd.date_range(h1[0], h1[-1], freq="1h").difference(h1).tolist() if len(h1) > 1 else []
+    h4 = data["4h"].index
+    gaps_4h = pd.date_range(h4[0], h4[-1], freq="4h").difference(h4).tolist() if len(h4) > 1 else []
     return {
         "ticker": ticker,
         "days": days,
@@ -54,7 +56,8 @@ def build_market(ticker: str, days: int) -> dict:
         "zones": get_zones(df5),
         "trend": {tf: analyze(df5, tf, n=SWING_N[tf]) for tf in data},
         "atr": {tf: last_atr(data[tf], ATR_PERIOD) for tf in data},
-        "gaps": gaps,
+        "gaps": gaps_1h,
+        "gaps_4h": gaps_4h,
     }
 
 
@@ -84,7 +87,8 @@ def build_fig(market, tf, layers, store, trades):
     df5 = market["df5"]
     zones = market["zones"]
     trend = market["trend"]
-    gaps = market["gaps"]
+    gaps = market["gaps_4h"] if tf == "4h" else market["gaps"]
+    gap_ms = 14_400_000 if tf == "4h" else 3_600_000
     view_days = market["days"]
     x = df.index
     x_end = x[-1]
@@ -168,7 +172,7 @@ def build_fig(market, tf, layers, store, trades):
         margin=dict(l=8, r=72, t=8, b=62), dragmode="pan", uirevision="keep",
         xaxis=dict(type="date", rangeslider_visible=False,
                    range=[x_start, df5.index[-1] + pd.Timedelta(hours=2)],
-                   tickformatstops=X_TICKS, rangebreaks=[dict(values=gaps, dvalue=3_600_000)],
+                   tickformatstops=X_TICKS, rangebreaks=[dict(values=gaps, dvalue=gap_ms)],
                    gridcolor=CHART_GRID),
         yaxis=yaxis,
         **layout_extra,
@@ -356,7 +360,11 @@ app.layout = html.Div(
                     ]),
                     html.Button("Učitaj", id="load-data", n_clicks=0, className="btn btn--primary"),
                     dcc.RadioItems(id="tf", value="5min", labelStyle=ITEM,
-                                   options=[{"label": "5 min", "value": "5min"}, {"label": "1 h", "value": "1h"}]),
+                                   options=[
+                                       {"label": "5 min", "value": "5min"},
+                                       {"label": "1 h", "value": "1h"},
+                                       {"label": "4 h", "value": "4h"},
+                                   ]),
                     dcc.Checklist(id="layers", value=["zones", "swings", "sessions", "trades"], labelStyle=ITEM,
                                   options=[
                                       {"label": "S/R zone (1h)", "value": "zones"},

@@ -46,5 +46,6 @@ def load_5m(ticker: str = DEFAULT_TICKER, days: int = 5) -> pd.DataFrame:
 def resample(df: pd.DataFrame, rule: str = "1h") -> pd.DataFrame:
     if rule in ("5min", "5m"):
         return df
-    out = df.resample(rule, closed="left", label="left").agg(OHLCV)
+    pd_rule = {"4h": "4h", "1h": "1h"}.get(rule, rule)
+    out = df.resample(pd_rule, closed="left", label="left").agg(OHLCV)
     return out.dropna(subset=["Open"])
