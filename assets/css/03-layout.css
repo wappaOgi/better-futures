@@ -1,0 +1,69 @@
+/* App shell & regions */
+.app-shell {
+  min-height: 100vh;
+  padding: var(--space-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md) var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.toolbar__label {
+  color: var(--color-text-muted);
+  margin-right: var(--space-sm);
+}
+
+.toolbar__group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.tab-content {
+  padding: var(--space-sm) 0;
+}
+
+.chart-wrap {
+  position: relative;
+  height: 78vh;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  background: var(--color-chart-bg);
+  box-shadow: var(--shadow-card);
+}
+
+.chart-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 80% 50% at 50% 100%,
+    var(--color-primary-dim) 0%,
+    transparent 70%
+  );
+  z-index: 0;
+}
+
+.chart-wrap .js-plotly-plot {
+  position: relative;
+  z-index: 1;
+}
+
+.badge-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}

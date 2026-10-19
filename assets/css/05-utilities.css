@@ -1,0 +1,40 @@
+/* Semantic text — state-driven colors only */
+.text-muted {
+  color: var(--color-text-muted);
+}
+
+.text-subtle {
+  color: var(--color-text-subtle);
+}
+
+.text-positive {
+  color: var(--color-positive);
+}
+
+.text-negative {
+  color: var(--color-negative);
+}
+
+.text-warning {
+  color: var(--color-warning);
+}
+
+.text-info {
+  color: var(--color-info);
+}
+
+.text-neutral {
+  color: var(--color-text-muted);
+}
+
+.badge {
+  margin-right: var(--space-lg);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.cache-badge {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-right: var(--space-md);
+}

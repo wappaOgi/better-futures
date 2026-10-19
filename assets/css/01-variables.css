@@ -1,0 +1,56 @@
+/* Design tokens — single source of truth for the theme */
+:root {
+  /* Surfaces */
+  --color-bg: #0b0d0e;
+  --color-surface: #1a1d1f;
+  --color-surface-raised: #222528;
+  --color-input: #111315;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
+
+  /* Brand */
+  --color-primary: #c5ff4a;
+  --color-primary-dim: rgba(197, 255, 74, 0.14);
+  --color-primary-glow: rgba(197, 255, 74, 0.35);
+  --color-on-primary: #0b0d0e;
+
+  /* Semantic */
+  --color-positive: #c5ff4a;
+  --color-negative: #ff5c5c;
+  --color-warning: #ffc857;
+  --color-info: #ba68c8;
+
+  /* Text */
+  --color-text: #f5f6f8;
+  --color-text-muted: #808191;
+  --color-text-subtle: #5c5e6e;
+
+  /* Chart (referenced by Plotly inline too) */
+  --color-chart-bg: #0b0d0e;
+  --color-chart-grid: #2a2d31;
+
+  /* Typography */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 14px;
+  --font-size-lg: 18px;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* Effects */
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.45);
+  --shadow-glow: 0 0 40px var(--color-primary-glow);
+  --transition: 0.15s ease;
+}

@@ -17,7 +17,8 @@ from trades import (
 from trend import analyze, trend_overlays
 from zones import get_zones
 
-GREEN, RED, AMBER = "#26a69a", "#ef5350", "#ffc107"
+GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
+CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
 SWING_N = {"5min": 6, "1h": 3}
 X_TICKS = [
     dict(dtickrange=[None, 600_000], value="%H:%M"),
@@ -26,23 +27,8 @@ X_TICKS = [
     dict(dtickrange=[86_400_000, 604_800_000], value="%d.%m."),
     dict(dtickrange=[604_800_000, None], value="%d.%m.%Y"),
 ]
-PANEL = {
-    "background": "#1c1f26", "border": "1px solid #333", "borderRadius": "6px",
-    "padding": "10px 12px", "marginTop": "6px",
-}
-INP = {"width": "110px", "marginRight": "8px"}
-MODAL_HIDE = {"display": "none"}
-MODAL_SHOW = {
-    "display": "flex", "position": "fixed", "top": 0, "left": 0, "right": 0, "bottom": 0,
-    "backgroundColor": "rgba(0,0,0,0.65)", "zIndex": 1000,
-    "alignItems": "center", "justifyContent": "center",
-}
-MODAL_BOX = {
-    "background": "#1c1f26", "border": "1px solid #444", "borderRadius": "8px",
-    "padding": "20px 24px", "minWidth": "340px", "maxWidth": "420px", "boxShadow": "0 8px 32px rgba(0,0,0,0.5)",
-}
-MODAL_ROW = {"marginBottom": "12px"}
-MODAL_LBL = {"display": "block", "color": "#aaa", "fontSize": "12px", "marginBottom": "4px"}
+MODAL_HIDE = "modal-backdrop is-hidden"
+MODAL_SHOW = "modal-backdrop"
 FAVORITE_TICKERS = [
     {"label": "MNQ · Nasdaq Micro", "value": "MNQ=F"},
     {"label": "MES · S&P Micro", "value": "MES=F"},
@@ -86,9 +72,9 @@ BANK = recalc(TRADES) if TRADES else load_bank()
 def empty_fig(msg: str = "Odaberi ticker i klikni Učitaj") -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
-        template="plotly_dark", paper_bgcolor="#14161a", plot_bgcolor="#14161a",
+        template="plotly_dark", paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
         margin=dict(l=8, r=72, t=40, b=62),
-        title=dict(text=msg, font=dict(size=14, color="#888"), x=0.5, xanchor="center"),
+        title=dict(text=msg, font=dict(size=14, color="#808191"), x=0.5, xanchor="center"),
         xaxis=dict(visible=False), yaxis=dict(visible=False),
     )
     return fig
@@ -129,7 +115,7 @@ def build_fig(market, tf, layers, store, trades):
         sw = sw_full.dropna(subset=["label"])
         for kind, pos, sym in (("H", "top center", "triangle-down"), ("L", "bottom center", "triangle-up")):
             s = sw[sw["kind"] == kind]
-            cols = [GREEN if lb in ("HH", "HL") else RED if lb in ("LH", "LL") else "#9e9e9e" for lb in s["label"]]
+            cols = [GREEN if lb in ("HH", "HL") else RED if lb in ("LH", "LL") else "#808191" for lb in s["label"]]
             fig.add_trace(go.Scatter(
                 x=s.index, y=s["price"], mode="markers+text", text=s["label"],
                 textposition=pos, textfont=dict(color=cols, size=11),
@@ -171,7 +157,7 @@ def build_fig(market, tf, layers, store, trades):
         ))
 
     x_start = df5.index[-1] - pd.Timedelta(days=view_days)
-    yaxis = dict(side="right", fixedrange=False, gridcolor="#22252b",
+    yaxis = dict(side="right", fixedrange=False, gridcolor=CHART_GRID,
                  tickformat=".2f", showexponent="none")
     layout_extra = {}
     if len(atr_s) >= 2:
@@ -179,16 +165,16 @@ def build_fig(market, tf, layers, store, trades):
         layout_extra["yaxis2"] = dict(
             title=dict(text=f"ATR({ATR_PERIOD})", font=dict(size=10, color="#ba68c8")),
             domain=[0.08, 0.18], anchor="x", overlaying=None, side="right",
-            showgrid=True, gridcolor="#22252b", tickformat=".1f", fixedrange=True,
+            showgrid=True, gridcolor=CHART_GRID, tickformat=".1f", fixedrange=True,
             zeroline=False,
         )
     fig.update_layout(
-        template="plotly_dark", paper_bgcolor="#14161a", plot_bgcolor="#14161a",
+        template="plotly_dark", paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
         margin=dict(l=8, r=72, t=8, b=62), dragmode="pan", uirevision="keep",
         xaxis=dict(type="date", rangeslider_visible=False,
                    range=[x_start, df5.index[-1] + pd.Timedelta(hours=2)],
                    tickformatstops=X_TICKS, rangebreaks=[dict(values=gaps, dvalue=3_600_000)],
-                   gridcolor="#22252b"),
+                   gridcolor=CHART_GRID),
         yaxis=yaxis,
         **layout_extra,
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
@@ -202,15 +188,15 @@ def trend_badges(trend, atr_map=None, tf="5min"):
     out = []
     for tframe, r in trend.items():
         arrow = {"UP": "▲", "DOWN": "▼", "RANGE": "◆"}[r["trend"]]
-        col = {"UP": GREEN, "DOWN": RED, "RANGE": AMBER}[r["trend"]]
+        cls = {"UP": "text-positive", "DOWN": "text-negative", "RANGE": "text-warning"}[r["trend"]]
         txt = f"{tframe}: {arrow} {r['trend']}"
         if r["invalidation"] is not None:
             txt += f" · invalidacija {r['invalidation']:.2f}" + (" (probijena)" if r["broken"] else "")
-        out.append(html.Span(txt, style={"color": col, "marginRight": "18px"}))
+        out.append(html.Span(txt, className=f"badge {cls}"))
     if atr_map:
         v = atr_map.get(tf)
         if v is not None:
-            out.append(html.Span(f"ATR({ATR_PERIOD}): {v:.1f} pts", style={"color": "#ba68c8", "marginRight": "18px"}))
+            out.append(html.Span(f"ATR({ATR_PERIOD}): {v:.1f} pts", className="badge text-info"))
     return out
 
 
@@ -218,63 +204,55 @@ def bank_panel(bank):
     r = risk_eur(bank)
     pnl = bank["balance_eur"] - bank["initial_eur"]
     sign = "+" if pnl >= 0 else ""
+    pnl_cls = "text-positive" if pnl >= 0 else "text-negative"
     return html.Div([
-        html.Span(f"Banka: {bank['balance_eur']:.2f} € ", style={"color": GREEN if pnl >= 0 else RED}),
-        html.Span(f"({sign}{pnl:.2f} €) · ", style={"color": "#aaa"}),
-        html.Span(f"risk {bank['risk_pct']}% = {r:.2f} € · margina {bank['margin']}x",
-                  style={"color": "#aaa"}),
+        html.Span(f"Banka: {bank['balance_eur']:.2f} € ", className=pnl_cls),
+        html.Span(f"({sign}{pnl:.2f} €) · ", className="text-muted"),
+        html.Span(f"risk {bank['risk_pct']}% = {r:.2f} € · margina {bank['margin']}x", className="text-muted"),
     ])
-
-
-BTN_SM = {"padding": "2px 8px", "fontSize": "12px", "cursor": "pointer", "marginRight": "4px",
-          "border": "none", "borderRadius": "3px"}
 
 
 def trades_table(trades):
     if not trades:
-        return html.P("Nema trejdova.", style={"color": "#888"})
+        return html.P("Nema trejdova.", className="empty-state")
     header = html.Tr([html.Th(c) for c in
                       ["Datum", "ID", "Test", "Dir", "Entry", "SL pts", "TP pts", "Status", "PnL pts", "PnL €", ""]])
     rows = []
     for t in sort_by_opened(trades):
         st = t.get("status", "open")
-        col = GREEN if st == "win" else RED if st == "loss" else "#aaa"
+        st_cls = "text-positive" if st == "win" else "text-negative" if st == "loss" else "text-neutral"
         pnl_pts = t.get("pnl_points")
         pnl_e = t.get("pnl_eur")
         tid = t["id"]
         rows.append(html.Tr([
-            html.Td(t["opened_at"][:16], style={"whiteSpace": "nowrap"}),
+            html.Td(t["opened_at"][:16], className="cell-nowrap"),
             html.Td(tid), html.Td("✓" if t.get("test") else ""),
             html.Td(t["direction"]), html.Td(f"{t['entry_price']:.2f}"),
             html.Td(f"{abs(t['sl_points']):.0f}"), html.Td(f"{abs(t['tp_points']):.0f}"),
-            html.Td(st, style={"color": col}),
+            html.Td(st, className=st_cls),
             html.Td(f"{pnl_pts:.0f}" if pnl_pts is not None else "—"),
-            html.Td(f"{pnl_e:.2f}" if pnl_e is not None else "—", style={"color": col}),
+            html.Td(f"{pnl_e:.2f}" if pnl_e is not None else "—", className=st_cls),
             html.Td([
                 html.Button("Uredi", id={"type": "edit-trade", "index": tid}, n_clicks=0,
-                            style={**BTN_SM, "background": "#444", "color": "#ccc"}),
+                            className="btn btn--secondary btn--sm"),
                 html.Button("Obriši", id={"type": "delete-trade", "index": tid}, n_clicks=0,
-                            style={**BTN_SM, "background": "#5d2a2a", "color": "#ef5350"}),
-            ], style={"whiteSpace": "nowrap"}),
+                            className="btn btn--danger btn--sm"),
+            ], className="cell-nowrap"),
         ]))
-    return html.Table(
-        [html.Thead(header), html.Tbody(rows)],
-        style={"width": "100%", "borderCollapse": "collapse", "fontSize": "13px"},
-    )
+    return html.Table([html.Thead(header), html.Tbody(rows)], className="data-table")
 
 
 def edit_trade_modal():
-    btn = {"padding": "6px 14px", "borderRadius": "4px", "border": "none", "cursor": "pointer", "fontSize": "14px"}
-    return html.Div(id="edit-modal", style=MODAL_HIDE, children=[
-        html.Div(style=MODAL_BOX, children=[
-            html.H3("Uredi trejd", style={"margin": "0 0 16px", "fontSize": "18px"}),
-            html.Div(id="edit-trade-label", style={"color": "#888", "fontSize": "12px", "marginBottom": "12px"}),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Entry", style=MODAL_LBL),
-                dcc.Input(id="edit-entry", type="number", style={**INP, "width": "100%"}),
+    return html.Div(id="edit-modal", className=MODAL_HIDE, children=[
+        html.Div(className="modal-card", children=[
+            html.H3("Uredi trejd", className="modal-card__title"),
+            html.Div(id="edit-trade-label", className="modal-card__subtitle"),
+            html.Div(className="field-row", children=[
+                html.Label("Entry", className="field-label"),
+                dcc.Input(id="edit-entry", type="number", className="input input--full"),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Smjer", style=MODAL_LBL),
+            html.Div(className="field-row", children=[
+                html.Label("Smjer", className="field-label"),
                 dcc.RadioItems(
                     id="edit-direction", value="long",
                     options=[{"label": " Long", "value": "long"}, {"label": " Short", "value": "short"}],
@@ -282,44 +260,41 @@ def edit_trade_modal():
                     inputStyle={"marginRight": "4px"},
                 ),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Stop loss (bodovi)", style=MODAL_LBL),
-                dcc.Input(id="edit-sl-pts", type="number", min=1, style={**INP, "width": "100%"}),
+            html.Div(className="field-row", children=[
+                html.Label("Stop loss (bodovi)", className="field-label"),
+                dcc.Input(id="edit-sl-pts", type="number", min=1, className="input input--full"),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Take profit (bodovi)", style=MODAL_LBL),
-                dcc.Input(id="edit-tp-pts", type="number", min=1, style={**INP, "width": "100%"}),
+            html.Div(className="field-row", children=[
+                html.Label("Take profit (bodovi)", className="field-label"),
+                dcc.Input(id="edit-tp-pts", type="number", min=1, className="input input--full"),
             ]),
-            html.Div(id="edit-preview", style={"color": "#aaa", "fontSize": "13px", "marginBottom": "12px"}),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Iznos €", style=MODAL_LBL),
-                dcc.Input(id="edit-size", type="number", style={**INP, "width": "100%"}),
+            html.Div(id="edit-preview", className="field-preview"),
+            html.Div(className="field-row", children=[
+                html.Label("Iznos €", className="field-label"),
+                dcc.Input(id="edit-size", type="number", className="input input--full"),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Margina", style=MODAL_LBL),
-                dcc.Input(id="edit-margin", type="number", min=1, style={**INP, "width": "100%"}),
+            html.Div(className="field-row", children=[
+                html.Label("Margina", className="field-label"),
+                dcc.Input(id="edit-margin", type="number", min=1, className="input input--full"),
             ]),
-            html.Div(style={"display": "flex", "gap": "10px", "marginTop": "16px", "justifyContent": "flex-end"}, children=[
-                html.Button("Odustani", id="edit-cancel", n_clicks=0,
-                            style={**btn, "background": "#444", "color": "#ccc"}),
-                html.Button("Spremi", id="edit-save", n_clicks=0,
-                            style={**btn, "background": GREEN, "color": "#fff"}),
+            html.Div(className="modal-card__actions", children=[
+                html.Button("Odustani", id="edit-cancel", n_clicks=0, className="btn btn--secondary"),
+                html.Button("Spremi", id="edit-save", n_clicks=0, className="btn btn--primary"),
             ]),
         ]),
     ])
 
 
 def trade_modal():
-    btn = {"padding": "6px 14px", "borderRadius": "4px", "border": "none", "cursor": "pointer", "fontSize": "14px"}
-    return html.Div(id="trade-modal", style=MODAL_HIDE, children=[
-        html.Div(style=MODAL_BOX, children=[
-            html.H3("Novi trejd", style={"margin": "0 0 16px", "fontSize": "18px"}),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Entry (trenutna cijena)", style=MODAL_LBL),
-                dcc.Input(id="modal-entry", type="number", disabled=True, style={**INP, "width": "100%", "opacity": 0.85}),
+    return html.Div(id="trade-modal", className=MODAL_HIDE, children=[
+        html.Div(className="modal-card", children=[
+            html.H3("Novi trejd", className="modal-card__title"),
+            html.Div(className="field-row", children=[
+                html.Label("Entry (trenutna cijena)", className="field-label"),
+                dcc.Input(id="modal-entry", type="number", disabled=True, className="input input--full"),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Smjer", style=MODAL_LBL),
+            html.Div(className="field-row", children=[
+                html.Label("Smjer", className="field-label"),
                 dcc.RadioItems(
                     id="modal-direction", value="long",
                     options=[{"label": " Long", "value": "long"}, {"label": " Short", "value": "short"}],
@@ -327,29 +302,27 @@ def trade_modal():
                     inputStyle={"marginRight": "4px"},
                 ),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Stop loss (bodovi)", style=MODAL_LBL),
-                dcc.Input(id="modal-sl-pts", type="number", value=30, min=1, style={**INP, "width": "100%"}),
+            html.Div(className="field-row", children=[
+                html.Label("Stop loss (bodovi)", className="field-label"),
+                dcc.Input(id="modal-sl-pts", type="number", value=30, min=1, className="input input--full"),
             ]),
-            html.Div(id="modal-sl-hint", style={"color": "#ba68c8", "fontSize": "12px", "margin": "-4px 0 8px"}),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Take profit (bodovi)", style=MODAL_LBL),
-                dcc.Input(id="modal-tp-pts", type="number", value=60, min=1, style={**INP, "width": "100%"}),
+            html.Div(id="modal-sl-hint", className="field-hint"),
+            html.Div(className="field-row", children=[
+                html.Label("Take profit (bodovi)", className="field-label"),
+                dcc.Input(id="modal-tp-pts", type="number", value=60, min=1, className="input input--full"),
             ]),
-            html.Div(id="modal-preview", style={"color": "#aaa", "fontSize": "13px", "marginBottom": "12px"}),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Iznos €", style=MODAL_LBL),
-                dcc.Input(id="modal-size", type="number", style={**INP, "width": "100%"}),
+            html.Div(id="modal-preview", className="field-preview"),
+            html.Div(className="field-row", children=[
+                html.Label("Iznos €", className="field-label"),
+                dcc.Input(id="modal-size", type="number", className="input input--full"),
             ]),
-            html.Div(style=MODAL_ROW, children=[
-                html.Label("Margina", style=MODAL_LBL),
-                dcc.Input(id="modal-margin", type="number", value=1, min=1, style={**INP, "width": "100%"}),
+            html.Div(className="field-row", children=[
+                html.Label("Margina", className="field-label"),
+                dcc.Input(id="modal-margin", type="number", value=1, min=1, className="input input--full"),
             ]),
-            html.Div(style={"display": "flex", "gap": "10px", "marginTop": "16px", "justifyContent": "flex-end"}, children=[
-                html.Button("Odustani", id="modal-cancel", n_clicks=0,
-                            style={**btn, "background": "#444", "color": "#ccc"}),
-                html.Button("Spremi trejd", id="modal-save", n_clicks=0,
-                            style={**btn, "background": GREEN, "color": "#fff"}),
+            html.Div(className="modal-card__actions", children=[
+                html.Button("Odustani", id="modal-cancel", n_clicks=0, className="btn btn--secondary"),
+                html.Button("Spremi trejd", id="modal-save", n_clicks=0, className="btn btn--primary"),
             ]),
         ]),
     ])
@@ -360,7 +333,6 @@ CONFIG = {
     "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape"],
     "edits": {"shapePosition": True, "annotationPosition": True, "annotationText": True},
 }
-BAR = {"display": "flex", "gap": "18px", "alignItems": "center", "flexWrap": "wrap", "padding": "6px 4px"}
 ITEM = {"marginRight": "12px", "display": "inline-block"}
 
 
@@ -368,14 +340,13 @@ def cache_badge(ticker: str) -> html.Span:
     path = cache_path(ticker or DEFAULT_TICKER)
     if path.exists():
         kb = path.stat().st_size // 1024
-        return html.Span(f"cache: {path.name} ({kb} KB)", style={"color": "#888"})
-    return html.Span("nema cachea", style={"color": "#666"})
+        return html.Span(f"cache: {path.name} ({kb} KB)", className="cache-badge")
+    return html.Span("nema cachea", className="cache-badge text-subtle")
 
 
 app = Dash(__name__)
 app.layout = html.Div(
-    style={"background": "#14161a", "color": "#d7dae0", "minHeight": "100vh", "padding": "6px",
-           "fontFamily": "system-ui, sans-serif", "fontSize": "14px"},
+    className="app-shell",
     children=[
         dcc.Store(id="trades-store", data=TRADES),
         dcc.Store(id="bank-store", data=BANK),
@@ -383,20 +354,18 @@ app.layout = html.Div(
         dcc.Store(id="store", data={}),
         dcc.Store(id="edit-trade-id", data=None),
         dcc.Store(id="d_fit"), dcc.Store(id="d_txt"), dcc.Store(id="d_clr"),
-        dcc.Tabs(id="main-tabs", value="Graf", children=[
-            dcc.Tab(label="Graf", value="Graf", children=[
-                html.Div(style=BAR, children=[
-                    dcc.Dropdown(id="ticker", value=DEFAULT_TICKER, options=TICKER_OPTS,
-                                 clearable=False, style={"width": "168px"}),
-                    dcc.Input(id="days", type="number", value=5, min=1, max=60, style={"width": "52px"}),
-                    html.Label(" dana ", style={"marginRight": "8px"}),
-                    html.Button("Učitaj", id="load-data", n_clicks=0,
-                                style={"marginRight": "4px", "padding": "2px 10px", "cursor": "pointer"}),
+        dcc.Tabs(id="main-tabs", value="Graf", className="custom-tabs", children=[
+            dcc.Tab(label="Graf", value="Graf", className="tab", selected_className="tab tab--selected", children=[
+                html.Div(className="toolbar", children=[
+                    dcc.Dropdown(id="ticker", value=DEFAULT_TICKER, options=TICKER_OPTS, clearable=False),
+                    html.Div(className="toolbar__group", children=[
+                        dcc.Input(id="days", type="number", value=5, min=1, max=60, className="input input--narrow"),
+                        html.Label("dana", className="toolbar__label"),
+                    ]),
+                    html.Button("Učitaj", id="load-data", n_clicks=0, className="btn btn--primary"),
                     html.Button("×", id="clear-cache", n_clicks=0, title="Obriši CSV cache",
-                                style={"marginRight": "12px", "padding": "0 8px", "cursor": "pointer",
-                                       "fontSize": "18px", "lineHeight": "1", "color": "#ef5350"}),
-                    html.Span(id="cache-badge", children=cache_badge(DEFAULT_TICKER),
-                              style={"marginRight": "12px", "fontSize": "12px"}),
+                                className="btn btn--danger btn--icon"),
+                    html.Span(id="cache-badge", children=cache_badge(DEFAULT_TICKER)),
                     dcc.RadioItems(id="tf", value="5min", labelStyle=ITEM,
                                    options=[{"label": "5 min", "value": "5min"}, {"label": "1 h", "value": "1h"}]),
                     dcc.Checklist(id="layers", value=["zones", "swings", "sessions", "trades"], labelStyle=ITEM,
@@ -406,31 +375,36 @@ app.layout = html.Div(
                                       {"label": "Sesije (x-os)", "value": "sessions"},
                                       {"label": "Trejdovi", "value": "trades"},
                                   ]),
-                    html.Button("Novi trejd", id="new-trade-btn", n_clicks=0,
-                                style={"padding": "2px 12px", "cursor": "pointer", "marginRight": "8px"}),
-                    dcc.Input(id="txt", type="text", placeholder="tekst bilješke", style={"width": "150px"}),
-                    html.Button("Dodaj tekst", id="add_txt"),
-                    html.Button("Očisti crteže", id="clear"),
+                    html.Button("Novi trejd", id="new-trade-btn", n_clicks=0, className="btn btn--primary"),
+                    dcc.Input(id="txt", type="text", placeholder="tekst bilješke", className="input input--wide"),
+                    html.Button("Dodaj tekst", id="add_txt", className="btn btn--secondary"),
+                    html.Button("Očisti crteže", id="clear", className="btn btn--ghost"),
                     html.Div(id="bank-badge", children=bank_panel(BANK)),
-                    html.Div(id="trend-badges", children=html.Span("—", style={"color": "#666"})),
+                    html.Div(id="trend-badges", className="badge-row",
+                             children=html.Span("—", className="text-muted")),
                 ]),
                 trade_modal(),
                 edit_trade_modal(),
-                dcc.Graph(id="chart", config=CONFIG, style={"height": "78vh"}),
-            ]),
-            dcc.Tab(label="Trejdovi", value="Trejdovi", children=[
-                html.Div(style={**PANEL, "margin": "12px 0"}, children=[
-                    html.H3("Banka", style={"margin": "0 0 8px"}),
-                    html.Div(id="bank-tab-info", children=bank_panel(BANK)),
-                    html.Div([
-                        html.Label("Početni € "), dcc.Input(id="bank-initial", type="number", value=BANK["initial_eur"], style=INP),
-                        html.Label("Risk % "), dcc.Input(id="bank-risk", type="number", value=BANK["risk_pct"], style=INP),
-                        html.Label("Margina "), dcc.Input(id="bank-margin", type="number", value=BANK["margin"], style=INP),
-                        html.Button("Spremi banku", id="save-bank", n_clicks=0),
-                    ], style={"marginTop": "10px"}),
+                html.Div(className="chart-wrap", children=[
+                    dcc.Graph(id="chart", config=CONFIG),
                 ]),
-                html.Div(style={**PANEL, "margin": "12px 0", "overflowX": "auto"}, children=[
-                    html.H3("Povijest trejdova", style={"margin": "0 0 8px"}),
+            ]),
+            dcc.Tab(label="Trejdovi", value="Trejdovi", className="tab", selected_className="tab tab--selected", children=[
+                html.Div(className="card", children=[
+                    html.H3("Banka", className="card__title"),
+                    html.Div(id="bank-tab-info", children=bank_panel(BANK)),
+                    html.Div(className="card__body-row", children=[
+                        html.Label("Početni €"), dcc.Input(id="bank-initial", type="number",
+                                                            value=BANK["initial_eur"], className="input input--bank"),
+                        html.Label("Risk %"), dcc.Input(id="bank-risk", type="number",
+                                                       value=BANK["risk_pct"], className="input input--bank"),
+                        html.Label("Margina"), dcc.Input(id="bank-margin", type="number",
+                                                          value=BANK["margin"], className="input input--bank"),
+                        html.Button("Spremi banku", id="save-bank", n_clicks=0, className="btn btn--primary"),
+                    ]),
+                ]),
+                html.Div(className="card card--scroll", children=[
+                    html.H3("Povijest trejdova", className="card__title"),
                     html.Div(id="trades-table", children=trades_table(TRADES)),
                 ]),
             ]),
@@ -509,9 +483,9 @@ def reload_market(_, ticker, days):
 )
 def update_chart(meta, tf, layers, trades, store):
     if not meta or meta.get("status") == "idle" or MARKET is None:
-        return empty_fig(), html.Span("—", style={"color": "#666"})
+        return empty_fig(), html.Span("—", className="text-muted")
     if meta.get("status") == "error":
-        return empty_fig(meta.get("msg", "Greška")), html.Span(meta.get("msg", "Greška"), style={"color": RED})
+        return empty_fig(meta.get("msg", "Greška")), html.Span(meta.get("msg", "Greška"), className="text-negative")
     tf = tf or "5min"
     return (
         build_fig(MARKET, tf, layers or [], store or {}, trades or []),
@@ -541,7 +515,7 @@ def _modal_preview(entry, direction, sl_pts, tp_pts):
 
 
 @app.callback(
-    Output("trade-modal", "style"),
+    Output("trade-modal", "className"),
     Output("modal-entry", "value"),
     Output("modal-direction", "value"),
     Output("modal-sl-pts", "value"),
@@ -637,7 +611,7 @@ def _trade_refresh(df5=None):
 
 
 @app.callback(
-    Output("edit-modal", "style"),
+    Output("edit-modal", "className"),
     Output("edit-trade-id", "data"),
     Output("edit-trade-label", "children"),
     Output("edit-entry", "value"),
