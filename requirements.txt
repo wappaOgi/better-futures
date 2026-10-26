@@ -2,3 +2,4 @@ yfinance
 pandas
 dash
 plotly
+backtesting==0.6.6

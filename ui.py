@@ -7,6 +7,9 @@ from bank import load as load_bank, recalc, risk_eur, save as save_bank, update_
 from atr import PERIOD as ATR_PERIOD, last as last_atr, series as atr_series, suggest_sl
 from data import DEFAULT_TICKER, load_5m, resample
 from symbols import FAVORITE_TICKERS, ticker_options
+from backtest_engine import discover_strategies, equity_figure, run_backtest, stats_cards
+
+STRATEGY_OPTS = discover_strategies()
 from sessions import overlays as session_overlays
 from timelines import overlays as timeline_overlays
 from trades import (
@@ -402,6 +405,46 @@ app.layout = html.Div(
                     html.Div(id="trades-table", children=trades_table(TRADES)),
                 ]),
             ]),
+            dcc.Tab(label="Backtest", value="Backtest", className="tab", selected_className="tab tab--selected", children=[
+                html.Div(className="card", children=[
+                    html.H3("Backtesting.py", className="card__title"),
+                    html.Div(className="toolbar", children=[
+                        dcc.Dropdown(
+                            id="bt-strategy", value=STRATEGY_OPTS[0]["value"],
+                            options=STRATEGY_OPTS, clearable=False,
+                        ),
+                        dcc.Dropdown(
+                            id="bt-ticker", value=DEFAULT_TICKER, options=FAVORITE_TICKERS,
+                            searchable=True, clearable=False,
+                            placeholder="Ticker…", maxHeight=320,
+                        ),
+                        html.Div(className="toolbar__group", children=[
+                            dcc.Input(id="bt-days", type="number", value=30, min=5, max=60,
+                                      className="input input--narrow"),
+                            html.Label("dana", className="toolbar__label"),
+                        ]),
+                        dcc.RadioItems(
+                            id="bt-tf", value="1h", labelStyle=ITEM,
+                            options=[
+                                {"label": "5 min", "value": "5min"},
+                                {"label": "1 h", "value": "1h"},
+                                {"label": "4 h", "value": "4h"},
+                            ],
+                        ),
+                        html.Div(className="toolbar__group", children=[
+                            html.Label("Cash $", className="toolbar__label"),
+                            dcc.Input(id="bt-cash", type="number", value=10000, min=1000,
+                                      className="input input--bank"),
+                        ]),
+                        html.Button("Pokreni backtest", id="bt-run", n_clicks=0, className="btn btn--primary"),
+                    ]),
+                    html.Div(id="bt-stats", className="badge-row",
+                             children=html.Span("Odaberi strategiju i klikni Pokreni backtest.", className="text-muted")),
+                    html.Div(className="chart-wrap", children=[
+                        dcc.Graph(id="bt-chart", figure=empty_fig("Backtest rezultat")),
+                    ]),
+                ]),
+            ]),
         ]),
     ],
 )
@@ -414,6 +457,42 @@ app.layout = html.Div(
 )
 def update_ticker_options(search, selected):
     return ticker_options(search, selected)
+
+
+@app.callback(
+    Output("bt-ticker", "options"),
+    Input("bt-ticker", "search_value"),
+    State("bt-ticker", "value"),
+)
+def update_bt_ticker_options(search, selected):
+    return ticker_options(search, selected)
+
+
+@app.callback(
+    Output("bt-chart", "figure"),
+    Output("bt-stats", "children"),
+    Input("bt-run", "n_clicks"),
+    State("bt-strategy", "value"),
+    State("bt-ticker", "value"),
+    State("bt-days", "value"),
+    State("bt-tf", "value"),
+    State("bt-cash", "value"),
+    prevent_initial_call=True,
+)
+def run_backtest_cb(n, strategy, ticker, days, tf, cash):
+    if not n:
+        return no_update, no_update
+    try:
+        stats, df, strategy_cls = run_backtest(
+            strategy or STRATEGY_OPTS[0]["value"],
+            ticker or DEFAULT_TICKER,
+            days=max(5, min(int(days or 30), 60)),
+            timeframe=tf or "1h",
+            cash=float(cash or 10_000),
+        )
+        return equity_figure(stats, df, strategy_cls), stats_cards(stats)
+    except Exception as e:
+        return empty_fig(str(e)), html.Span(str(e), className="text-negative")
 
 
 @app.callback(
