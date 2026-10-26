@@ -6,6 +6,7 @@ from dash import ALL, Dash, Input, Output, State, clientside_callback, ctx, dcc,
 from bank import load as load_bank, recalc, risk_eur, save as save_bank, update_settings
 from atr import PERIOD as ATR_PERIOD, last as last_atr, series as atr_series, suggest_sl
 from data import DEFAULT_TICKER, load_5m, resample
+from symbols import FAVORITE_TICKERS, ticker_options
 from sessions import overlays as session_overlays
 from timelines import overlays as timeline_overlays
 from trades import (
@@ -29,18 +30,6 @@ X_TICKS = [
 ]
 MODAL_HIDE = "modal-backdrop is-hidden"
 MODAL_SHOW = "modal-backdrop"
-TICKER_OPTS = [
-    {"label": "MNQ · Nasdaq Micro", "value": "MNQ=F"},
-    {"label": "MES · S&P Micro", "value": "MES=F"},
-    {"label": "GC · Gold", "value": "GC=F"},
-    {"label": "CL · Oil", "value": "CL=F"},
-    {"label": "NG · Gas", "value": "NG=F"},
-    {"label": "NQ · Nasdaq", "value": "NQ=F"},
-    {"label": "ES · S&P", "value": "ES=F"},
-    {"label": "MYM · Dow Micro", "value": "MYM=F"},
-]
-
-
 def build_market(ticker: str, days: int) -> dict:
     df5 = load_5m(ticker, days)
     data = {"5min": df5, "1h": resample(df5, "1h"), "4h": resample(df5, "4h")}
@@ -353,7 +342,15 @@ app.layout = html.Div(
         dcc.Tabs(id="main-tabs", value="Graf", className="custom-tabs", children=[
             dcc.Tab(label="Graf", value="Graf", className="tab", selected_className="tab tab--selected", children=[
                 html.Div(className="toolbar", children=[
-                    dcc.Dropdown(id="ticker", value=DEFAULT_TICKER, options=TICKER_OPTS, clearable=False),
+                    dcc.Dropdown(
+                        id="ticker",
+                        value=DEFAULT_TICKER,
+                        options=FAVORITE_TICKERS,
+                        searchable=True,
+                        clearable=False,
+                        placeholder="Pretraži ticker (npr. Tesla, AAPL)…",
+                        maxHeight=320,
+                    ),
                     html.Div(className="toolbar__group", children=[
                         dcc.Input(id="days", type="number", value=5, min=1, max=60, className="input input--narrow"),
                         html.Label("dana", className="toolbar__label"),
@@ -408,6 +405,15 @@ app.layout = html.Div(
         ]),
     ],
 )
+
+
+@app.callback(
+    Output("ticker", "options"),
+    Input("ticker", "search_value"),
+    State("ticker", "value"),
+)
+def update_ticker_options(search, selected):
+    return ticker_options(search, selected)
 
 
 @app.callback(

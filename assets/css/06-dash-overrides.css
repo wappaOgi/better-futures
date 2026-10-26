@@ -2,7 +2,7 @@
 
 /* ── Dropdown (ticker) ── */
 .toolbar .dash-dropdown-wrapper {
-  width: 200px;
+  width: min(320px, 42vw);
   min-width: 200px;
   flex-shrink: 0;
 }
