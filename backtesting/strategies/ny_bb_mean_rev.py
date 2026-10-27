@@ -2,12 +2,12 @@
 import numpy as np
 
 from bt_risk import RiskSizedStrategy
-from indicators import BB_PERIOD, BB_STD, RSI_PERIOD, bollinger, rsi
+from indicators import BB_PERIOD, BB_STD, RSI_PERIOD, SMA_TREND, bollinger, rsi, sma
 from ny_orb import ny_session_mask
 
 
 class NyBbMeanRev(RiskSizedStrategy):
-    label = "NY BB Mean Rev (R:R 1:2)"
+    label = "NY BB Mean Rev (R:R 1:3)"
     chart_profile = "ny"
     required_timeframe = "5min"
     min_days = 10
@@ -19,7 +19,7 @@ class NyBbMeanRev(RiskSizedStrategy):
     rsi_short = 75
     rsi_long = 30
     sl_points = 5
-    rr_ratio = 2.0
+    rr_ratio = 3.0
 
     def init(self):
         df = self.data.df
@@ -27,6 +27,7 @@ class NyBbMeanRev(RiskSizedStrategy):
         self._bb_upper = bb["bb_upper"].to_numpy()
         self._bb_lower = bb["bb_lower"].to_numpy()
         self._rsi = rsi(df["Close"], self.rsi_period).to_numpy()
+        self._sma200 = sma(df["Close"], SMA_TREND).to_numpy()
         self._in_ny = ny_session_mask(df)
         med = float(np.nanmedian(self.data.Close))
         self._sl_off = self.sl_points * 1e-8 if med < 1.0 else float(self.sl_points)
@@ -68,9 +69,13 @@ class NyBbMeanRev(RiskSizedStrategy):
             return
 
         i = len(self.data) - 1
-        if i < max(self.bb_period, self.rsi_period, 2):
+        if i < max(self.bb_period, self.rsi_period, SMA_TREND, 2):
             return
         if not self._in_ny[i]:
+            return
+
+        sma200 = self._sma200[i]
+        if np.isnan(sma200):
             return
 
         rsi_v = self._rsi[i]
@@ -84,8 +89,8 @@ class NyBbMeanRev(RiskSizedStrategy):
         bearish = close < open_
         bullish = close >= open_
 
-        # short: crvena svijeća na gornjem BB + RSI okret
-        if high >= bb_up and bearish and self._rsi_short_turn(i):
+        # short: crvena svijeća na gornjem BB + RSI okret, ispod SMA200
+        if high >= bb_up and bearish and close < sma200 and self._rsi_short_turn(i):
             sl = high + self._sl_off
             risk = sl - close
             if risk <= 0:
@@ -95,8 +100,8 @@ class NyBbMeanRev(RiskSizedStrategy):
                 self.sell_risk(sl=sl, tp=tp)
             return
 
-        # long: zelena svijeća na donjem BB + RSI okret
-        if low <= bb_lo and bullish and self._rsi_long_turn(i):
+        # long: zelena svijeća na donjem BB + RSI okret, iznad SMA200
+        if low <= bb_lo and bullish and close > sma200 and self._rsi_long_turn(i):
             sl = low - self._sl_off
             risk = close - sl
             if risk <= 0:

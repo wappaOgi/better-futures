@@ -2,7 +2,7 @@
 import numpy as np
 
 from bt_risk import RiskSizedStrategy
-from indicators import BB_PERIOD, BB_STD, RSI_PERIOD, bollinger, rsi
+from indicators import BB_PERIOD, BB_STD, RSI_PERIOD, SMA_TREND, bollinger, rsi, sma
 from ny_orb import compute_ny_orb, compute_ny_vwap
 
 
@@ -44,6 +44,7 @@ class NyOrbRvolMr(RiskSizedStrategy):
         self._bb_upper = bb["bb_upper"].to_numpy()
         self._bb_lower = bb["bb_lower"].to_numpy()
         self._rsi = rsi(df["Close"], self.rsi_period).to_numpy()
+        self._sma200 = sma(df["Close"], SMA_TREND).to_numpy()
         self._last_traded_day = -1
         self._track_day = -1
         self._broke_high = False
@@ -107,14 +108,18 @@ class NyOrbRvolMr(RiskSizedStrategy):
             return
 
         vwap = self._vwap[i]
+        sma200 = self._sma200[i]
+        if np.isnan(sma200):
+            return
 
         rsi_v = self._rsi[i]
         bb_up, bb_lo = self._bb_upper[i], self._bb_lower[i]
 
-        # failed upside break → short (MR + RSI>70 + BB upper)
+        # failed upside break → short (MR + RSI>70 + BB upper, ispod SMA200)
         if self._broke_high and prev_close >= or_h and close < or_h:
             if (
-                not np.isnan(vwap) and close > vwap
+                close < sma200
+                and not np.isnan(vwap) and close > vwap
                 and not np.isnan(rsi_v) and rsi_v > 70
                 and not np.isnan(bb_up) and close >= bb_up
             ):
@@ -127,10 +132,11 @@ class NyOrbRvolMr(RiskSizedStrategy):
                 self._last_traded_day = day
             return
 
-        # failed downside break → long (MR + RSI<30 + BB lower)
+        # failed downside break → long (MR + RSI<30 + BB lower, iznad SMA200)
         if self._broke_low and prev_close <= or_l and close > or_l:
             if (
-                not np.isnan(vwap) and close < vwap
+                close > sma200
+                and not np.isnan(vwap) and close < vwap
                 and not np.isnan(rsi_v) and rsi_v < 30
                 and not np.isnan(bb_lo) and close <= bb_lo
             ):

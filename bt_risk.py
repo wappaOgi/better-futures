@@ -23,14 +23,32 @@ class RiskSizedStrategy(Strategy):
     def _risk_size(self, entry: float, sl: float) -> float:
         return size_for_risk(self.equity, self.risk_pct, entry, sl)
 
-    def buy_risk(self, sl: float, tp: float, entry: float | None = None):
+    def buy_risk(
+        self,
+        sl: float,
+        tp: float,
+        entry: float | None = None,
+        fill: float | None = None,
+    ):
         entry = float(self.data.Close[-1] if entry is None else entry)
+        fill = float(self.data.Close[-1] if fill is None else fill)
+        if sl >= fill or tp <= fill:
+            return
         size = self._risk_size(entry, sl)
         if size > 0:
             self.buy(size=size, sl=sl, tp=tp)
 
-    def sell_risk(self, sl: float, tp: float, entry: float | None = None):
+    def sell_risk(
+        self,
+        sl: float,
+        tp: float,
+        entry: float | None = None,
+        fill: float | None = None,
+    ):
         entry = float(self.data.Close[-1] if entry is None else entry)
+        fill = float(self.data.Close[-1] if fill is None else fill)
+        if sl <= fill or tp >= fill:
+            return
         size = self._risk_size(entry, sl)
         if size > 0:
             self.sell(size=size, sl=sl, tp=tp)

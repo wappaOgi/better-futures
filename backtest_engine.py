@@ -84,11 +84,14 @@ def run_backtest(
     min_bars = getattr(StrategyCls, "min_bars", 50)
     if len(df) < min_bars:
         raise ValueError(f"Premalo podataka za backtest (min ~{min_bars} barova)")
+    trade_on_close = getattr(StrategyCls, "trade_on_close", True)
+    spread = getattr(StrategyCls, "spread", 0.0)
     bt = FractionalBacktest(
         df, StrategyCls,
         cash=float(cash),
         commission=float(commission),
-        trade_on_close=True,
+        spread=float(spread),
+        trade_on_close=trade_on_close,
         exclusive_orders=True,
         finalize_trades=True,
     )
@@ -96,6 +99,8 @@ def run_backtest(
     run_kw = {}
     if hasattr(StrategyCls, "risk_pct"):
         run_kw["risk_pct"] = risk_pct
+    if hasattr(StrategyCls, "rr_ratio"):
+        run_kw["rr_ratio"] = getattr(StrategyCls, "rr_ratio")
     stats = bt.run(**run_kw)
     return stats, df, StrategyCls
 

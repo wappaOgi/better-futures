@@ -2,6 +2,7 @@
 import numpy as np
 
 from bt_risk import RiskSizedStrategy
+from indicators import SMA_TREND, sma
 from ny_orb import compute_ny_orb
 
 
@@ -34,6 +35,7 @@ class NyOrbRvol(RiskSizedStrategy):
         self._post_or = sig["post_or"].to_numpy()
         self._volatile = sig["volatile"].to_numpy()
         self._day_id = sig["day_id"].to_numpy()
+        self._sma200 = sma(self.data.df["Close"], SMA_TREND).to_numpy()
         self._last_traded_day = -1
 
         self.or_high_line = self.I(
@@ -65,9 +67,12 @@ class NyOrbRvol(RiskSizedStrategy):
 
         prev_close = self.data.Close[-2]
         high, low, close = self.data.High[-1], self.data.Low[-1], self.data.Close[-1]
+        sma200 = self._sma200[i]
+        if np.isnan(sma200):
+            return
 
-        # proboj OR high → long
-        if high > or_h and prev_close <= or_h:
+        # proboj OR high → long (iznad SMA200)
+        if high > or_h and prev_close <= or_h and close > sma200:
             risk = close - or_l
             if risk <= 0:
                 return
@@ -75,8 +80,8 @@ class NyOrbRvol(RiskSizedStrategy):
             self._last_traded_day = self._day_id[i]
             return
 
-        # proboj OR low → short
-        if low < or_l and prev_close >= or_l:
+        # proboj OR low → short (ispod SMA200)
+        if low < or_l and prev_close >= or_l and close < sma200:
             risk = or_h - close
             if risk <= 0:
                 return
