@@ -1,7 +1,7 @@
 """NY open-range breakout — RVOL (1h) + ATR(5) filter, R:R 1:3."""
 import numpy as np
-from backtesting import Strategy
 
+from bt_risk import RiskSizedStrategy
 from ny_orb import compute_ny_orb
 
 
@@ -11,7 +11,7 @@ def _as_indicator(arr):
     return _fn
 
 
-class NyOrbRvol(Strategy):
+class NyOrbRvol(RiskSizedStrategy):
     label = "NY ORB + RVOL + ATR (1:3)"
     required_timeframe = "5min"
     min_days = 20
@@ -71,7 +71,7 @@ class NyOrbRvol(Strategy):
             risk = close - or_l
             if risk <= 0:
                 return
-            self.buy(sl=or_l, tp=close + self.rr_ratio * risk)
+            self.buy_risk(sl=or_l, tp=close + self.rr_ratio * risk)
             self._last_traded_day = self._day_id[i]
             return
 
@@ -80,7 +80,7 @@ class NyOrbRvol(Strategy):
             risk = or_h - close
             if risk <= 0:
                 return
-            self.sell(sl=or_h, tp=close - self.rr_ratio * risk)
+            self.sell_risk(sl=or_h, tp=close - self.rr_ratio * risk)
             self._last_traded_day = self._day_id[i]
 
 

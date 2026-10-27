@@ -436,6 +436,11 @@ app.layout = html.Div(
                             dcc.Input(id="bt-cash", type="number", value=10000, min=1000,
                                       className="input input--bank"),
                         ]),
+                        html.Div(className="toolbar__group", children=[
+                            html.Label("Rizik %", className="toolbar__label"),
+                            dcc.Input(id="bt-risk", type="number", value=1, min=0.1, max=25,
+                                      step=0.1, className="input input--narrow"),
+                        ]),
                         html.Button("Pokreni backtest", id="bt-run", n_clicks=0, className="btn btn--primary"),
                     ]),
                     html.Div(id="bt-stats", className="badge-row",
@@ -477,9 +482,10 @@ def update_bt_ticker_options(search, selected):
     State("bt-days", "value"),
     State("bt-tf", "value"),
     State("bt-cash", "value"),
+    State("bt-risk", "value"),
     prevent_initial_call=True,
 )
-def run_backtest_cb(n, strategy, ticker, days, tf, cash):
+def run_backtest_cb(n, strategy, ticker, days, tf, cash, risk):
     if not n:
         return no_update, no_update
     try:
@@ -489,6 +495,7 @@ def run_backtest_cb(n, strategy, ticker, days, tf, cash):
             days=max(5, min(int(days or 30), 60)),
             timeframe=tf or "1h",
             cash=float(cash or 10_000),
+            risk_pct=float(risk or 1) / 100.0,
         )
         return equity_figure(stats, df, strategy_cls), stats_cards(stats)
     except Exception as e:

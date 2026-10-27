@@ -2,17 +2,22 @@
 import importlib.util
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 from backtesting import Strategy as BtStrategy
 from backtesting.lib import FractionalBacktest
 from dash import html
+from plotly.subplots import make_subplots
 
 from data import load_5m, resample
-from ny_orb import compute_ny_orb
+from indicators import BB_PERIOD, BB_STD, RSI_PERIOD, bollinger, rsi
+from ny_orb import compute_ny_orb, compute_ny_vwap, ny_session_dim_shapes
 
 STRATEGIES_DIR = Path(__file__).parent / "backtesting" / "strategies"
 CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
 GREEN, RED = "#c5ff4a", "#ff5c5c"
+BLUE = "#42a5f5"
 
 STAT_KEYS = [
     "Return [%]",
@@ -65,6 +70,7 @@ def run_backtest(
     days: int = 30,
     timeframe: str = "1h",
     cash: float = 10_000,
+    risk_pct: float = 0.01,
     commission: float = 0.0002,
 ):
     StrategyCls = _load_strategy(strategy_name)
@@ -86,7 +92,11 @@ def run_backtest(
         exclusive_orders=True,
         finalize_trades=True,
     )
-    stats = bt.run()
+    risk_pct = max(0.001, min(float(risk_pct), 0.25))
+    run_kw = {}
+    if hasattr(StrategyCls, "risk_pct"):
+        run_kw["risk_pct"] = risk_pct
+    stats = bt.run(**run_kw)
     return stats, df, StrategyCls
 
 
@@ -107,17 +117,27 @@ def stats_cards(stats) -> html.Div:
     return html.Div(items, className="badge-row")
 
 
+def _uses_ny_chart(strategy_cls) -> bool:
+    if strategy_cls is None:
+        return False
+    if getattr(strategy_cls, "chart_profile", None) == "ny":
+        return True
+    return hasattr(strategy_cls, "rvol_threshold")
+
+
 def _orb_overlays(strategy_cls, df):
-    if strategy_cls is None or not hasattr(strategy_cls, "rvol_threshold"):
+    if not hasattr(strategy_cls, "rvol_threshold"):
         return []
     sig = compute_ny_orb(
         df,
         rvol_lookback=getattr(strategy_cls, "rvol_lookback", 14),
         atr_period=getattr(strategy_cls, "atr_period", 5),
     )
+    vwap = compute_ny_vwap(df)
     return [
         ("OR High", sig["or_high"], "#ffeb3b"),
         ("OR Low", sig["or_low"], "#ff9800"),
+        ("VWAP", vwap, "#4fc3f7"),
     ]
 
 
@@ -136,39 +156,284 @@ def _sma_overlays(strategy_cls, df):
     ]
 
 
-def equity_figure(stats, df, strategy_cls=None) -> go.Figure:
-    eq = stats.get("_equity_curve")
-    fig = go.Figure()
-    if eq is not None and len(eq):
-        fig.add_trace(go.Scatter(
-            x=eq.index, y=eq["Equity"], name="Equity",
-            line=dict(color=GREEN, width=2),
-            fill="tozeroy", fillcolor="rgba(197,255,74,0.08)",
-        ))
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df["Close"], name="Close",
-        line=dict(color="#808191", width=1), yaxis="y2",
-    ))
-    for name, series, color in _sma_overlays(strategy_cls, df) + _orb_overlays(strategy_cls, df):
-        fig.add_trace(go.Scatter(
-            x=df.index, y=series, name=name,
-            line=dict(color=color, width=1.5), yaxis="y2",
-        ))
+def _volume_colors(df) -> list[str]:
+    up = (df["Close"] >= df["Open"]).to_numpy()
+    return np.where(up, GREEN, RED).tolist()
+
+
+def _add_candles(fig, df, row: int, secondary_y: bool = False, name: str = "OHLC"):
+    fig.add_trace(
+        go.Candlestick(
+            x=df.index, open=df["Open"], high=df["High"],
+            low=df["Low"], close=df["Close"], name=name,
+            increasing_line_color=GREEN, decreasing_line_color=RED,
+            increasing_fillcolor=GREEN, decreasing_fillcolor=RED,
+        ),
+        row=row, col=1, secondary_y=secondary_y,
+    )
+
+
+def _add_bollinger(fig, df, row: int = 1):
+    bb = bollinger(df["Close"], BB_PERIOD, BB_STD)
+    x = df.index
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=bb["bb_upper"], name=f"BB upper ({BB_PERIOD})",
+            line=dict(color="rgba(186,104,200,0.9)", width=1),
+        ),
+        row=row, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=bb["bb_lower"], name=f"BB lower ({BB_PERIOD})",
+            line=dict(color="rgba(186,104,200,0.9)", width=1),
+            fill="tonexty", fillcolor="rgba(186,104,200,0.08)",
+        ),
+        row=row, col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x, y=bb["bb_mid"], name=f"BB mid ({BB_PERIOD})",
+            line=dict(color="rgba(186,104,200,0.45)", width=1, dash="dot"),
+        ),
+        row=row, col=1,
+    )
+
+
+def _add_rsi(fig, df, row: int = 3, ob: float = 70, os_level: float = 30):
+    rsi_s = rsi(df["Close"], RSI_PERIOD)
+    x = df.index
+    zones = [
+        (rsi_s > ob, RED, f"RSI > {ob:g}"),
+        (rsi_s < os_level, GREEN, f"RSI < {os_level:g}"),
+        ((rsi_s >= os_level) & (rsi_s <= ob), "#808191", f"RSI({RSI_PERIOD})"),
+    ]
+    for mask, color, name in zones:
+        fig.add_trace(
+            go.Scatter(
+                x=x, y=rsi_s.where(mask), mode="lines", name=name,
+                line=dict(color=color, width=1.5), connectgaps=False,
+            ),
+            row=row, col=1,
+        )
+    fig.add_hline(y=ob, line=dict(color=RED, width=1, dash="dash"), row=row, col=1)
+    fig.add_hline(y=os_level, line=dict(color=GREEN, width=1, dash="dash"), row=row, col=1)
+
+
+def _rgba(color: str, a: float) -> str:
+    c = color.lstrip("#")
+    return f"rgba({int(c[0:2], 16)},{int(c[2:4], 16)},{int(c[4:6], 16)},{a:.2f})"
+
+
+def _ny_dim_shapes(df, rows: tuple[int, ...] = (1, 2, 3)) -> list:
+    yrefs = {1: "y", 2: "y3", 3: "y4"}
+    ylims = {
+        1: (df["Low"].min(), df["High"].max()),
+        2: (0, df["Volume"].max() * 1.05),
+        3: (0, 100),
+    }
+    shapes = []
+    for row in rows:
+        yref = yrefs.get(row, "y")
+        y0, y1 = ylims.get(row, (0, 1))
+        shapes.extend(ny_session_dim_shapes(df, yref=yref, y0=y0, y1=y1))
+    return shapes
+
+
+def _trade_label(x, y, text, color, anchor="left", valign="middle"):
+    return dict(
+        x=x, y=y, xref="x", yref="y", text=text, showarrow=False,
+        xanchor=anchor, yanchor=valign, font=dict(size=8, color=color),
+        bgcolor="rgba(0,0,0,0.45)", borderpad=2, name="trade",
+    )
+
+
+def _backtest_trade_overlays(stats, df) -> tuple[list, list]:
+    """Pravokutnik entry→exit; SL/TP = donja/gornja granica; ✓/✗ po ishodu."""
     trades = stats.get("_trades")
-    if trades is not None and len(trades):
-        bars = [int(i) for i in trades["EntryBar"] if int(i) < len(df)]
-        if bars:
-            fig.add_trace(go.Scatter(
-                x=df.index[bars], y=df["Close"].iloc[bars].tolist(),
-                mode="markers", name="Entry",
-                marker=dict(symbol="triangle-up", size=9, color=GREEN),
-            ))
+    shapes, annotations = [], []
+    if trades is None or not len(trades):
+        return shapes, annotations
+
+    n = len(df)
+    bar_delta = pd.Timedelta(minutes=5)
+    if n >= 2:
+        bar_delta = max(df.index[1] - df.index[0], bar_delta)
+    fixed = dict(layer="above", name="trade", editable=False)
+
+    for _, t in trades.iterrows():
+        eb, xb = int(t["EntryBar"]), int(t["ExitBar"])
+        if eb < 0 or xb < 0 or eb >= n or xb >= n:
+            continue
+        x0, x1 = df.index[min(eb, xb)], df.index[max(eb, xb)]
+        if x1 <= x0:
+            x1 = x0 + bar_delta
+
+        sl, tp = t.get("SL"), t.get("TP")
+        if pd.isna(sl) or pd.isna(tp):
+            continue
+        sl, tp = float(sl), float(tp)
+        entry = float(t["EntryPrice"])
+        box_lo, box_hi = min(sl, tp), max(sl, tp)
+        if box_lo >= box_hi:
+            continue
+
+        win = float(t["ReturnPct"]) >= 0
+        col = GREEN if win else RED
+        ret_pct = float(t["ReturnPct"]) * 100.0
+        pct_txt = f"+{ret_pct:.2f}%" if win else f"{ret_pct:.2f}%"
+        direction = "long" if float(t["Size"]) > 0 else "short"
+        sym = "▲ LONG" if direction == "long" else "▼ SHORT"
+        t_lbl = x0 + (x1 - x0) * 0.04
+
+        shapes.extend([
+            dict(
+                type="rect", xref="x", yref="y", x0=x0, x1=x1,
+                y0=box_lo, y1=box_hi,
+                fillcolor=_rgba(col, 0.10),
+                line=dict(color=col, width=2),
+                **fixed,
+            ),
+            dict(
+                type="line", xref="x", yref="y", x0=x0, x1=x1,
+                y0=entry, y1=entry,
+                line=dict(color=BLUE, width=1, dash="dash"),
+                **fixed,
+            ),
+        ])
+
+        annotations.extend([
+            _trade_label(t_lbl, box_hi, sym, BLUE, valign="top"),
+            _trade_label(t_lbl, box_hi, f"TP {tp:.2f}", GREEN, valign="bottom"),
+            _trade_label(t_lbl, entry, f"E {entry:.2f}", BLUE),
+            _trade_label(t_lbl, box_lo, f"SL {sl:.2f}", RED, valign="top"),
+            dict(
+                x=x1, y=box_hi, xref="x", yref="y",
+                text="✓" if win else "✗", showarrow=False,
+                xanchor="right", yanchor="top",
+                font=dict(size=16, color=col),
+                bgcolor="rgba(0,0,0,0.5)", borderpad=3, name="trade",
+            ),
+            _trade_label(t_lbl, (box_lo + box_hi) / 2, pct_txt, col),
+        ])
+
+    return shapes, annotations
+
+
+def _apply_chart_extras(fig, df, stats, *, ny_dim: bool = False):
+    shapes = _ny_dim_shapes(df) if ny_dim else []
+    trade_shapes, trade_ann = _backtest_trade_overlays(stats, df)
+    fig.update_layout(
+        shapes=shapes + trade_shapes,
+        annotations=trade_ann,
+        margin=dict(l=8, r=72, t=24, b=48),
+    )
+
+
+def _ny_session_figure(stats, df, strategy_cls) -> go.Figure:
+    eq = stats.get("_equity_curve")
+    rsi_ob = getattr(strategy_cls, "rsi_short", 70)
+    rsi_os = getattr(strategy_cls, "rsi_long", 30)
+
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+        row_heights=[0.54, 0.16, 0.22],
+        specs=[[{"secondary_y": True}], [{}], [{}]],
+    )
+
+    _add_candles(fig, df, row=1)
+    _add_bollinger(fig, df, row=1)
+    for name, series, color in _orb_overlays(strategy_cls, df):
+        fig.add_trace(
+            go.Scatter(
+                x=df.index, y=series, name=name,
+                line=dict(color=color, width=1.5),
+            ),
+            row=1, col=1,
+        )
+
+    if eq is not None and len(eq):
+        fig.add_trace(
+            go.Scatter(
+                x=eq.index, y=eq["Equity"], name="Equity",
+                line=dict(color=GREEN, width=2),
+                fill="tozeroy", fillcolor="rgba(197,255,74,0.08)",
+            ),
+            row=1, col=1, secondary_y=True,
+        )
+
+    fig.add_trace(
+        go.Bar(
+            x=df.index, y=df["Volume"], name="Volume",
+            marker_color=_volume_colors(df), opacity=0.75,
+        ),
+        row=2, col=1,
+    )
+
+    _add_rsi(fig, df, row=3, ob=rsi_ob, os_level=rsi_os)
+
     fig.update_layout(
         template="plotly_dark", paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
-        margin=dict(l=8, r=72, t=24, b=48),
-        legend=dict(orientation="h", y=1.02),
-        yaxis=dict(title="Equity $", side="right", gridcolor=CHART_GRID),
-        yaxis2=dict(title="Cijena", overlaying="y", side="left", showgrid=False),
-        xaxis=dict(gridcolor=CHART_GRID),
+        legend=dict(orientation="h", y=1.06),
+        xaxis_rangeslider_visible=False,
+        xaxis2=dict(gridcolor=CHART_GRID),
+        xaxis3=dict(gridcolor=CHART_GRID),
+        yaxis=dict(title="Cijena", gridcolor=CHART_GRID, side="left"),
+        yaxis2=dict(title="Equity $", overlaying="y", side="right", showgrid=False),
+        yaxis3=dict(title="Vol", gridcolor=CHART_GRID),
+        yaxis4=dict(title=f"RSI({RSI_PERIOD})", gridcolor=CHART_GRID, range=[0, 100]),
     )
+    fig.update_xaxes(showticklabels=True, row=3, col=1)
+    _apply_chart_extras(fig, df, stats, ny_dim=True)
     return fig
+
+
+def _default_equity_figure(stats, df, strategy_cls) -> go.Figure:
+    eq = stats.get("_equity_curve")
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+        row_heights=[0.78, 0.22],
+        specs=[[{"secondary_y": True}], [{}]],
+    )
+    _add_candles(fig, df, row=1)
+    for name, series, color in _sma_overlays(strategy_cls, df):
+        fig.add_trace(
+            go.Scatter(
+                x=df.index, y=series, name=name,
+                line=dict(color=color, width=1.5),
+            ),
+            row=1, col=1,
+        )
+    if eq is not None and len(eq):
+        fig.add_trace(
+            go.Scatter(
+                x=eq.index, y=eq["Equity"], name="Equity",
+                line=dict(color=GREEN, width=2),
+                fill="tozeroy", fillcolor="rgba(197,255,74,0.08)",
+            ),
+            row=1, col=1, secondary_y=True,
+        )
+    fig.add_trace(
+        go.Bar(
+            x=df.index, y=df["Volume"], name="Volume",
+            marker_color=_volume_colors(df), opacity=0.75,
+        ),
+        row=2, col=1,
+    )
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
+        legend=dict(orientation="h", y=1.04),
+        xaxis_rangeslider_visible=False,
+        yaxis=dict(title="Cijena", gridcolor=CHART_GRID, side="left"),
+        yaxis2=dict(title="Equity $", overlaying="y", side="right", showgrid=False),
+        yaxis3=dict(title="Vol", gridcolor=CHART_GRID),
+    )
+    fig.update_xaxes(showticklabels=True, row=2, col=1)
+    _apply_chart_extras(fig, df, stats, ny_dim=False)
+    return fig
+
+
+def equity_figure(stats, df, strategy_cls=None) -> go.Figure:
+    if _uses_ny_chart(strategy_cls):
+        return _ny_session_figure(stats, df, strategy_cls)
+    return _default_equity_figure(stats, df, strategy_cls)

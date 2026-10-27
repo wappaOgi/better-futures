@@ -133,3 +133,76 @@ def compute_ny_orb(
         },
         index=df.index,
     )
+
+
+def _ny_session_bar(ts: pd.Timestamp) -> bool:
+    return ts.weekday() < 5 and OR_START <= ts.time() < NY_END
+
+
+def ny_session_mask(df: pd.DataFrame) -> np.ndarray:
+    et = _to_et(df.index)
+    return np.array([_ny_session_bar(t) for t in et], dtype=bool)
+
+
+def ny_session_dim_shapes(
+    df: pd.DataFrame,
+    *,
+    yref: str = "y",
+    y0: float | None = None,
+    y1: float | None = None,
+    opacity: float = 0.72,
+) -> list[dict]:
+    """Zamrači periode izvan NY sesije (09:30–17:00 ET)."""
+    et = _to_et(df.index)
+    y0 = float(y0 if y0 is not None else df["Low"].min())
+    y1 = float(y1 if y1 is not None else df["High"].max())
+    fill = f"rgba(0,0,0,{opacity:.2f})"
+    shapes, in_block, block_start = [], False, None
+
+    for i, t in enumerate(et):
+        outside = not _ny_session_bar(t)
+        if outside and not in_block:
+            in_block, block_start = True, df.index[i]
+        elif not outside and in_block:
+            shapes.append(dict(
+                type="rect", xref="x", yref=yref,
+                x0=block_start, x1=df.index[i - 1],
+                y0=y0, y1=y1, fillcolor=fill, line_width=0, layer="below",
+            ))
+            in_block = False
+    if in_block:
+        shapes.append(dict(
+            type="rect", xref="x", yref=yref,
+            x0=block_start, x1=df.index[-1],
+            y0=y0, y1=y1, fillcolor=fill, line_width=0, layer="below",
+        ))
+    return shapes
+
+
+def compute_ny_vwap(df: pd.DataFrame) -> pd.Series:
+    """
+    VWAP sidrište na početku prvog sata NY sesije (09:30 ET).
+    Kumulativno se računa kroz cijelu NY sesiju (09:30–17:00 ET).
+    """
+    et = _to_et(df.index)
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    vol = df["Volume"].fillna(0.0)
+    out = np.full(len(df), np.nan)
+    cum_pv, cum_v = 0.0, 0.0
+    cur_day = None
+
+    for i, t in enumerate(et):
+        if not _ny_session_bar(t):
+            continue
+        d = t.date()
+        if d != cur_day:
+            cum_pv, cum_v = 0.0, 0.0
+            cur_day = d
+        v = float(vol.iloc[i])
+        if v > 0:
+            cum_pv += float(tp.iloc[i]) * v
+            cum_v += v
+        if cum_v > 0:
+            out[i] = cum_pv / cum_v
+
+    return pd.Series(out, index=df.index, name="vwap")
