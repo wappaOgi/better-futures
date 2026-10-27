@@ -1,7 +1,9 @@
 """UI: Dash + Plotly. Pokretanje: python ui.py  ->  http://127.0.0.1:8050"""
+from datetime import time as dt_time
+
 import pandas as pd
 import plotly.graph_objects as go
-from dash import ALL, Dash, Input, Output, State, clientside_callback, ctx, dcc, html, no_update
+from dash import ALL, Dash, Input, MATCH, Output, State, clientside_callback, ctx, dcc, html, no_update
 
 from bank import load as load_bank, recalc, risk_eur, save as save_bank, update_settings
 from atr import PERIOD as ATR_PERIOD, last as last_atr, series as atr_series, suggest_sl
@@ -20,6 +22,15 @@ from trades import (
 )
 from trend import analyze, trend_overlays
 from zones import get_zones
+from screener import ScreenerConfig, parse_symbols, run_screener, SCREENER_DEFAULT_SYMBOLS
+from market_movers import (
+    all_symbols_in_history,
+    fetch_and_persist,
+    save_comment,
+    symbol_history,
+    trading_day_key,
+)
+from fundamentals import analyze_fundamentals, fetch_ticker_news
 
 GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
 CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
@@ -238,6 +249,205 @@ def trades_table(trades):
     return html.Table([html.Thead(header), html.Tbody(rows)], className="data-table")
 
 
+def _fmt_num(v, fmt=".2f", empty="—"):
+    if v is None:
+        return empty
+    try:
+        return format(float(v), fmt)
+    except (TypeError, ValueError):
+        return empty
+
+
+def screener_table(rows):
+    if not rows:
+        return html.P("Nema rezultata.", className="empty-state")
+    header = html.Tr([html.Th(c) for c in [
+        "#", "Ticker", "Score", "Pass", "Gap %", "MCap", "ADR %", "ADV", "RVOL PM",
+        "PM vol", "PM $", "Spread %", "Katalizator", "Base", "Napomena",
+    ]])
+    body = []
+    for i, r in enumerate(rows, 1):
+        passed = r.get("passed")
+        pass_cls = "text-positive" if passed else "text-muted"
+        pass_txt = "✓" if passed else "—"
+        mcap = r.get("market_cap")
+        mcap_s = _fmt_num(mcap / 1e9, ".2f") + "B" if mcap else "—"
+        cat = r.get("catalyst") or "—"
+        if r.get("catalyst_headline"):
+            cat = html.Span([cat, html.Br(), html.Small(r["catalyst_headline"][:80], className="text-muted")])
+        note = r.get("fail_reason") or r.get("error") or ""
+        body.append(html.Tr([
+            html.Td(str(i)),
+            html.Td(r.get("symbol", "?"), className="cell-nowrap"),
+            html.Td(_fmt_num(r.get("score"), ".1f")),
+            html.Td(pass_txt, className=pass_cls),
+            html.Td(_fmt_num(r.get("gap_pct"), ".1f")),
+            html.Td(mcap_s),
+            html.Td(_fmt_num(r.get("adr_pct"), ".1f")),
+            html.Td(_fmt_num(r.get("adv"), ",.0f")),
+            html.Td(_fmt_num(r.get("rvol_pm"), ".2f")),
+            html.Td(_fmt_num(r.get("premarket_volume"), ",.0f")),
+            html.Td(_fmt_num(r.get("premarket_dollar_volume"), ",.0f")),
+            html.Td(_fmt_num(r.get("spread_pct"), ".2f")),
+            html.Td(cat),
+            html.Td("✓" if r.get("consolidating") else "—"),
+            html.Td(note, className="text-muted"),
+        ]))
+    return html.Table([html.Thead(header), html.Tbody(body)], className="data-table")
+
+
+def movers_side_table(rows, title: str, pct_class: str, side: str, expanded: dict | None = None):
+    if not rows:
+        return html.Div([
+            html.H4(title, className="card__title", style={"fontSize": "14px", "marginTop": "8px"}),
+            html.P("Nema podataka.", className="empty-state"),
+        ])
+    header = html.Tr([html.Th(c) for c in ["", "#", "Symbol", "Naziv", "Cijena", "Promjena %", "Volumen", "Komentar", ""]])
+    body = []
+    exp = expanded or {}
+    for i, r in enumerate(rows, 1):
+        sym = r.get("symbol") or "?"
+        is_open = exp.get("symbol") == sym and exp.get("side") == side
+        pct = r.get("regularMarketChangePercent")
+        pct_s = _fmt_num(pct, "+.2f") + "%" if pct is not None else "—"
+        row_style = {"background": "rgba(197, 255, 74, 0.08)"} if is_open else {}
+        body.append(html.Tr([
+            html.Td(html.Button(
+                "▼" if is_open else "▶",
+                id={"type": "mov-expand", "symbol": sym, "side": side},
+                n_clicks=0,
+                className="btn btn--ghost btn--sm",
+                title="Vijesti i fundamenti",
+            )),
+            html.Td(str(i)),
+            html.Td(sym, className="cell-nowrap"),
+            html.Td((r.get("shortName") or "—")[:36]),
+            html.Td(_fmt_num(r.get("regularMarketPrice"), ".2f")),
+            html.Td(pct_s, className=pct_class),
+            html.Td(_fmt_num(r.get("regularMarketVolume"), ",.0f")),
+            html.Td(dcc.Input(
+                id={"type": "mov-comment", "symbol": sym, "side": side},
+                type="text",
+                value=r.get("comment") or "",
+                placeholder="Bilješka…",
+                className="input",
+                style={"width": "100%", "minWidth": "120px"},
+            )),
+            html.Td(html.Button(
+                "Spremi",
+                id={"type": "mov-save-comment", "symbol": sym, "side": side},
+                n_clicks=0,
+                className="btn btn--secondary btn--sm",
+            ), className="cell-nowrap"),
+        ], style=row_style))
+    return html.Div([
+        html.H4(title, className="card__title", style={"fontSize": "14px", "marginTop": "8px"}),
+        html.Table([html.Thead(header), html.Tbody(body)], className="data-table"),
+    ])
+
+
+def movers_panels(gainers, losers, expanded: dict | None = None):
+    return html.Div(className="card--scroll", children=[
+        html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "16px"}, children=[
+            movers_side_table(gainers, "Top gainers (25)", "text-positive", "gainer", expanded),
+            movers_side_table(losers, "Top losers (25)", "text-negative", "loser", expanded),
+        ]),
+    ])
+
+
+def _mini_table(rows: list[list[str]]) -> html.Table | html.P:
+    if not rows:
+        return html.P("Nema podataka.", className="text-muted", style={"fontSize": "12px"})
+    head = html.Tr([html.Th(c) for c in rows[0]])
+    body = [html.Tr([html.Td(c) for c in row]) for row in rows[1:]]
+    return html.Table([html.Thead(head), html.Tbody(body)], className="data-table", style={"fontSize": "11px"})
+
+
+def render_mover_detail(symbol: str) -> html.Div:
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        return html.Div()
+    try:
+        news = fetch_ticker_news(sym, count=10)
+        fund = analyze_fundamentals(sym)
+    except Exception as e:
+        return html.Div(className="card", style={"marginTop": "12px"}, children=[
+            html.H4(f"{sym} — detalj", style={"fontSize": "14px"}),
+            html.P(str(e), className="text-negative"),
+        ])
+
+    news_block = []
+    if not news:
+        news_block.append(html.P("Nema vijesti (Yahoo).", className="text-muted"))
+    else:
+        for item in news:
+            title = item.get("title") or "—"
+            link = item.get("link")
+            pub = item.get("publisher") or ""
+            line = html.Li([
+                html.A(title, href=link, target="_blank") if link else title,
+                html.Span(f" · {pub}" if pub else "", className="text-muted", style={"fontSize": "12px"}),
+            ])
+            news_block.append(line)
+
+    metrics = fund.get("metrics") or {}
+    metric_rows = [[k, v if v is not None else "—"] for k, v in metrics.items()]
+
+    tables = []
+    for key in ("income", "balance_sheet", "cashflow", "earnings_history", "eps_estimates", "eps_revisions", "revenue_estimates", "insider"):
+        block = fund.get(key) or {}
+        tables.append(html.Div([
+            html.H5(block.get("title", key), style={"fontSize": "13px", "margin": "12px 0 6px"}),
+            _mini_table(block.get("rows") or []),
+        ]))
+
+    return html.Div(className="card", style={"marginTop": "12px"}, children=[
+        html.H4(f"{sym} — vijesti i fundamenti", style={"fontSize": "15px"}),
+        html.P("Podaci se učitavaju uživo; ne spremaju se u JSON.", className="text-muted", style={"fontSize": "12px"}),
+        html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "20px"}, children=[
+            html.Div([
+                html.H5("Vijesti", style={"fontSize": "13px"}),
+                html.Ul(news_block, style={"paddingLeft": "18px", "fontSize": "13px"}),
+            ]),
+            html.Div([
+                html.H5("Ključne metrike", style={"fontSize": "13px"}),
+                html.Table(
+                    [html.Tbody([html.Tr([html.Td(k), html.Td(str(v) if v is not None else "—")]) for k, v in metric_rows])],
+                    className="data-table",
+                    style={"fontSize": "12px"},
+                ),
+            ]),
+        ]),
+        html.Div(tables),
+    ])
+
+
+def symbol_history_table(rows):
+    if not rows:
+        return html.P("Nema spremljene povijesti za ovaj simbol.", className="empty-state")
+    header = html.Tr([html.Th(c) for c in ["Datum", "Lista", "Promjena %", "Cijena", "Komentar"]])
+    body = []
+    for r in rows:
+        pct = r.get("change_pct")
+        cls = "text-positive" if pct is not None and pct >= 0 else "text-negative"
+        pct_s = _fmt_num(pct, "+.2f") + "%" if pct is not None else "—"
+        body.append(html.Tr([
+            html.Td(r.get("date", "—"), className="cell-nowrap"),
+            html.Td(r.get("side", "—")),
+            html.Td(pct_s, className=cls),
+            html.Td(_fmt_num(r.get("price"), ".2f")),
+            html.Td((r.get("comment") or "—")[:80]),
+        ]))
+    return html.Table([html.Thead(header), html.Tbody(body)], className="data-table")
+
+
+def _movers_symbol_options(extra: list[str] | None = None):
+    syms = set(all_symbols_in_history())
+    if extra:
+        syms.update(s for s in extra if s)
+    return [{"label": s, "value": s} for s in sorted(syms)]
+
+
 def edit_trade_modal():
     return html.Div(id="edit-modal", className=MODAL_HIDE, children=[
         html.Div(className="modal-card", children=[
@@ -405,6 +615,116 @@ app.layout = html.Div(
                     html.Div(id="trades-table", children=trades_table(TRADES)),
                 ]),
             ]),
+            dcc.Tab(label="Screener", value="Screener", className="tab", selected_className="tab tab--selected", children=[
+                dcc.Store(id="scr-mov-store", data={"gainers": [], "losers": [], "day": None}),
+                dcc.Store(id="scr-mov-expanded", data=None),
+                dcc.Tabs(
+                    id="scr-subtabs",
+                    value="scr-ep",
+                    className="custom-tabs",
+                    children=[
+                        dcc.Tab(
+                            label="EP Premarket",
+                            value="scr-ep",
+                            className="tab",
+                            selected_className="tab tab--selected",
+                            children=[
+                                html.Div(className="card", children=[
+                                    html.H3("EP / Premarket screener", className="card__title"),
+                                    html.P(
+                                        "Skenira kandidate (Stage A filtri + Stage B rang). "
+                                        "Intraday metrike isključivo na 1h barovima (prepost); "
+                                        "dnevni barovi samo za ADR, ADV i prethodni close.",
+                                        className="text-muted",
+                                        style={"marginBottom": "12px", "fontSize": "13px"},
+                                    ),
+                                    html.Div(className="toolbar", style={"flexWrap": "wrap", "gap": "8px"}, children=[
+                                        html.Div(className="toolbar__group", children=[
+                                            html.Label("Scan ET", className="toolbar__label"),
+                                            dcc.Dropdown(
+                                                id="scr-scan-time",
+                                                value="09:20",
+                                                clearable=False,
+                                                options=[
+                                                    {"label": "08:00 ET (rano)", "value": "08:00"},
+                                                    {"label": "09:20 ET (pre open)", "value": "09:20"},
+                                                ],
+                                                style={"width": "180px"},
+                                            ),
+                                        ]),
+                                        html.Div(className="toolbar__group", children=[
+                                            html.Label("Min gap %", className="toolbar__label"),
+                                            dcc.Input(id="scr-min-gap", type="number", value=10, min=1, step=0.5,
+                                                      className="input input--narrow"),
+                                        ]),
+                                        html.Button("Pokreni scan", id="scr-run", n_clicks=0, className="btn btn--primary"),
+                                    ]),
+                                    html.Div(className="field-row", children=[
+                                        html.Label("Watchlist (simboli, zarez)", className="field-label"),
+                                        dcc.Textarea(
+                                            id="scr-symbols",
+                                            value=", ".join(SCREENER_DEFAULT_SYMBOLS),
+                                            style={"width": "100%", "minHeight": "72px", "fontFamily": "monospace"},
+                                        ),
+                                    ]),
+                                    html.Div(id="scr-status", className="badge-row",
+                                             children=html.Span("Postavi watchlist i klikni Pokreni scan.", className="text-muted")),
+                                    html.Div(id="scr-results", className="card--scroll", children=screener_table([])),
+                                ]),
+                            ],
+                        ),
+                        dcc.Tab(
+                            label="Top Gainers and Losers",
+                            value="scr-movers",
+                            className="tab",
+                            selected_className="tab tab--selected",
+                            children=[
+                                html.Div(className="card", children=[
+                                    html.H3("Top Gainers and Losers", className="card__title"),
+                                    html.P(
+                                        "25 gainers + 25 losers. U JSON se spremaju samo cijena, dnevni % i komentar. "
+                                        "Klik ▶ na redu za vijesti i fundamente (uživo, bez spremanja).",
+                                        className="text-muted",
+                                        style={"marginBottom": "12px", "fontSize": "13px"},
+                                    ),
+                                    html.Div(className="toolbar", children=[
+                                        html.Button(
+                                            "Učitaj gainers/losers",
+                                            id="scr-mov-run",
+                                            n_clicks=0,
+                                            className="btn btn--primary",
+                                        ),
+                                    ]),
+                                    html.Div(id="scr-mov-status", className="badge-row", children=[
+                                        html.Span("Klikni Učitaj za 50 dionica (25+25).", className="text-muted"),
+                                    ]),
+                                    html.Div(id="scr-mov-results", children=movers_panels([], [])),
+                                    html.Div(id="scr-mov-detail"),
+                                    html.Hr(style={"borderColor": "var(--color-border)", "margin": "20px 0"}),
+                                    html.H4("Usporedba s prijašnjim danima", style={"fontSize": "14px"}),
+                                    html.P(
+                                        "Odaberi ticker koji je bio na listi — prikazuju se spremljeni dnevni % "
+                                        f"iz {trading_day_key()} i ranijih snapshotova.",
+                                        className="text-muted",
+                                        style={"fontSize": "13px"},
+                                    ),
+                                    html.Div(className="toolbar", children=[
+                                        dcc.Dropdown(
+                                            id="scr-mov-symbol",
+                                            options=_movers_symbol_options(),
+                                            placeholder="Ticker…",
+                                            searchable=True,
+                                            clearable=True,
+                                            style={"minWidth": "220px"},
+                                        ),
+                                    ]),
+                                    html.Div(id="scr-mov-history", children=symbol_history_table([])),
+                                ]),
+                            ],
+                        ),
+                    ],
+                ),
+            ]),
             dcc.Tab(label="Backtest", value="Backtest", className="tab", selected_className="tab tab--selected", children=[
                 html.Div(className="card", children=[
                     html.H3("Backtesting.py", className="card__title"),
@@ -471,6 +791,128 @@ def update_ticker_options(search, selected):
 )
 def update_bt_ticker_options(search, selected):
     return ticker_options(search, selected)
+
+
+@app.callback(
+    Output("scr-mov-results", "children"),
+    Output("scr-mov-status", "children"),
+    Output("scr-mov-store", "data"),
+    Output("scr-mov-symbol", "options"),
+    Output("scr-mov-expanded", "data"),
+    Output("scr-mov-detail", "children"),
+    Input("scr-mov-run", "n_clicks"),
+    prevent_initial_call=True,
+)
+def run_market_movers_cb(n):
+    if not n:
+        return (no_update,) * 6
+    try:
+        payload = fetch_and_persist()
+        syms = [r["symbol"] for r in payload["gainers"] + payload["losers"] if r.get("symbol")]
+        status = html.Span(
+            f"Spremljeno {payload['total']} dionica za {payload['day']} → market_movers.json "
+            "(cijena, % promjena, komentar)",
+            className="text-positive",
+        )
+        store = {
+            "day": payload["day"],
+            "gainers": payload["gainers"],
+            "losers": payload["losers"],
+        }
+        return (
+            movers_panels(payload["gainers"], payload["losers"]),
+            status,
+            store,
+            _movers_symbol_options(syms),
+            None,
+            html.Div(),
+        )
+    except Exception as e:
+        return movers_panels([], []), html.Span(str(e), className="text-negative"), no_update, no_update, None, html.Div()
+
+
+@app.callback(
+    Output("scr-mov-expanded", "data", allow_duplicate=True),
+    Output("scr-mov-detail", "children", allow_duplicate=True),
+    Output("scr-mov-results", "children", allow_duplicate=True),
+    Input({"type": "mov-expand", "symbol": ALL, "side": ALL}, "n_clicks"),
+    State("scr-mov-expanded", "data"),
+    State("scr-mov-store", "data"),
+    prevent_initial_call=True,
+)
+def toggle_mover_detail(_clicks, expanded, store):
+    if not any(_clicks):
+        return (no_update,) * 3
+    tid = ctx.triggered_id
+    if not isinstance(tid, dict) or tid.get("type") != "mov-expand":
+        return (no_update,) * 3
+    key = {"symbol": tid["symbol"], "side": tid["side"]}
+    store = store or {}
+    gainers = store.get("gainers") or []
+    losers = store.get("losers") or []
+    if expanded and expanded.get("symbol") == key["symbol"] and expanded.get("side") == key["side"]:
+        return None, html.Div(), movers_panels(gainers, losers, None)
+    detail = render_mover_detail(key["symbol"])
+    return key, detail, movers_panels(gainers, losers, key)
+
+
+@app.callback(
+    Output("scr-mov-status", "children", allow_duplicate=True),
+    Input({"type": "mov-save-comment", "symbol": MATCH, "side": MATCH}, "n_clicks"),
+    State({"type": "mov-comment", "symbol": MATCH, "side": MATCH}, "value"),
+    State("scr-mov-store", "data"),
+    prevent_initial_call=True,
+)
+def save_mover_comment_cb(n, comment, store):
+    if not n:
+        return no_update
+    tid = ctx.triggered_id
+    day = (store or {}).get("day") or trading_day_key()
+    sym = tid["symbol"]
+    side = tid["side"]
+    save_comment(day, sym, side, comment or "")
+    return html.Span(f"Komentar spremljen: {sym} ({day})", className="text-positive")
+
+
+@app.callback(
+    Output("scr-mov-history", "children"),
+    Input("scr-mov-symbol", "value"),
+)
+def show_mover_symbol_history(symbol):
+    if not symbol:
+        return symbol_history_table([])
+    return symbol_history_table(symbol_history(symbol))
+
+
+@app.callback(
+    Output("scr-results", "children"),
+    Output("scr-status", "children"),
+    Input("scr-run", "n_clicks"),
+    State("scr-symbols", "value"),
+    State("scr-scan-time", "value"),
+    State("scr-min-gap", "value"),
+    prevent_initial_call=True,
+)
+def run_screener_cb(n, symbols_text, scan_time, min_gap):
+    if not n:
+        return no_update, no_update
+    symbols = parse_symbols(symbols_text)
+    hh, mm = (scan_time or "09:20").split(":")
+    cfg = ScreenerConfig(
+        min_gap_pct=float(min_gap or 10),
+        scan_time_et=dt_time(int(hh), int(mm)),
+    )
+    status = html.Span(f"Skeniram {len(symbols)} simbola (1h prepost)…", className="text-warning")
+    try:
+        rows = run_screener(symbols, cfg)
+        n_pass = sum(1 for r in rows if r.get("passed"))
+        status = html.Span(
+            f"Gotovo: {n_pass}/{len(rows)} prošlo Stage A · scan cutoff {scan_time} ET",
+            className="text-positive" if n_pass else "text-muted",
+        )
+        return screener_table(rows[:50]), status
+    except Exception as e:
+        return screener_table([]), html.Span(str(e), className="text-negative")
 
 
 @app.callback(
