@@ -12,7 +12,7 @@ from symbols import FAVORITE_TICKERS, ticker_options
 from backtest_engine import discover_strategies, equity_figure, run_backtest, stats_cards
 
 STRATEGY_OPTS = discover_strategies()
-from sessions import overlays as session_overlays
+from sessions import LABELS as SESSION_LABELS, STYLE as SESSION_STYLE, compute_session_vwap, overlays as session_overlays
 from timelines import overlays as timeline_overlays
 from trades import (
     FILE as TRADES_FILE,
@@ -45,6 +45,11 @@ from indicators import (
 
 GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
 CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
+SESSION_VWAP_KEYS = {
+    "vwap_asia": "asia",
+    "vwap_london": "london",
+    "vwap_ny": "ny",
+}
 SWING_N = {"5min": 6, "1h": 3, "4h": 2}
 X_TICKS = [
     dict(dtickrange=[None, 600_000], value="%H:%M"),
@@ -207,6 +212,22 @@ def build_fig(market, tf, layers, store, trades):
             layout_vp = None
     else:
         layout_vp = None
+
+    for key, sid in SESSION_VWAP_KEYS.items():
+        if key not in active:
+            continue
+        vwap = compute_session_vwap(df, sid)
+        vv = vwap.dropna()
+        if vv.empty:
+            continue
+        col = SESSION_STYLE[sid][0]
+        fig.add_trace(go.Scatter(
+            x=vv.index, y=vv.values, mode="lines",
+            line=dict(color=col, width=1.8),
+            name=f"VWAP {SESSION_LABELS[sid]}",
+            hovertemplate=f"VWAP {SESSION_LABELS[sid]}: %{{y:.2f}}<extra></extra>",
+            showlegend=False,
+        ))
 
     if "zones" in active:
         for z in zones.itertuples():
@@ -775,6 +796,9 @@ app.layout = html.Div(
                                 {"label": "EMA 10", "value": "ema10"},
                                 {"label": "EMA 20", "value": "ema20"},
                                 {"label": "Volume profile", "value": "vp"},
+                                {"label": "VWAP Asia", "value": "vwap_asia"},
+                                {"label": "VWAP London", "value": "vwap_london"},
+                                {"label": "VWAP NY", "value": "vwap_ny"},
                             ],
                         ),
                     ]),
