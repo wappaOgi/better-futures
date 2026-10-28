@@ -31,6 +31,8 @@ from market_movers import (
     trading_day_key,
 )
 from fundamentals import analyze_fundamentals, fetch_ticker_news
+from algo.hurst import MIN_SERIES as HURST_MIN_BARS, analyze_ohlc
+from indicators import BB_PERIOD, BB_STD, bollinger, ema, sma
 
 GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
 CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
@@ -99,7 +101,46 @@ def build_fig(market, tf, layers, store, trades):
         x=x, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
         increasing_line_color=GREEN, decreasing_line_color=RED, showlegend=False))
 
-    if "zones" in layers:
+    active = set(layers or [])
+    close = df["Close"]
+    if "bb" in active:
+        bb = bollinger(close, BB_PERIOD, BB_STD)
+        fig.add_trace(go.Scatter(
+            x=x, y=bb["bb_upper"], mode="lines",
+            line=dict(color="rgba(186,104,200,0.9)", width=1),
+            hovertemplate=f"BB upper: %{{y:.2f}}<extra></extra>", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=x, y=bb["bb_lower"], mode="lines",
+            line=dict(color="rgba(186,104,200,0.9)", width=1),
+            fill="tonexty", fillcolor="rgba(186,104,200,0.08)",
+            hovertemplate=f"BB lower: %{{y:.2f}}<extra></extra>", showlegend=False,
+        ))
+        fig.add_trace(go.Scatter(
+            x=x, y=bb["bb_mid"], mode="lines",
+            line=dict(color="rgba(186,104,200,0.45)", width=1, dash="dot"),
+            hovertemplate=f"BB mid: %{{y:.2f}}<extra></extra>", showlegend=False,
+        ))
+    if "sma50" in active:
+        fig.add_trace(go.Scatter(
+            x=x, y=sma(close, 50), mode="lines",
+            line=dict(color=AMBER, width=1.5),
+            hovertemplate="SMA50: %{y:.2f}<extra></extra>", showlegend=False,
+        ))
+    if "ema10" in active:
+        fig.add_trace(go.Scatter(
+            x=x, y=ema(close, 10), mode="lines",
+            line=dict(color="#42a5f5", width=1.5),
+            hovertemplate="EMA10: %{y:.2f}<extra></extra>", showlegend=False,
+        ))
+    if "ema20" in active:
+        fig.add_trace(go.Scatter(
+            x=x, y=ema(close, 20), mode="lines",
+            line=dict(color="#ff9800", width=1.5),
+            hovertemplate="EMA20: %{y:.2f}<extra></extra>", showlegend=False,
+        ))
+
+    if "zones" in active:
         for z in zones.itertuples():
             col = {"support": GREEN, "resistance": RED}.get(z.kind, AMBER)
             x0 = z.start
@@ -111,7 +152,7 @@ def build_fig(market, tf, layers, store, trades):
                 text=f"{z.kind} {z.low:.2f} - {z.high:.2f} ({z.touches} dodira)"))
 
     trend_shapes, trend_ann = [], []
-    if "swings" in layers:
+    if "swings" in active:
         sw_full = trend[tf]["swings"]
         sw = sw_full.dropna(subset=["label"])
         for kind, pos, sym in (("H", "top center", "triangle-down"), ("L", "bottom center", "triangle-up")):
@@ -139,11 +180,11 @@ def build_fig(market, tf, layers, store, trades):
 
     tl_shapes, tl_ann = timeline_overlays(df5.index[0], df5.index[-1])
     sess_shapes, sess_ann = [], []
-    if "sessions" in layers:
+    if "sessions" in active:
         sess_shapes, sess_ann = session_overlays(df5.index[0], df5.index[-1])
 
     trade_shapes, trade_ann = [], []
-    if "trades" in layers:
+    if "trades" in active:
         chart_trades = for_ticker(trades or [], market["ticker"])
         for t in chart_trades:
             sh, an = chart_overlays(t, x_end)
@@ -184,6 +225,75 @@ def build_fig(market, tf, layers, store, trades):
         annotations=tl_ann + sess_ann + trend_ann + trade_ann + [price_ann] + store.get("annotations", []),
     )
     return fig
+
+
+HURST_TONE = {
+    "MOMENTUM": "text-warning",
+    "NEUTRAL": "text-muted",
+    "MEAN_REV": "text-positive",
+}
+
+
+def hurst_placeholder(msg: str = "—", cls: str = "text-muted"):
+    return html.Div(className="hurst-toolbar", children=[
+        html.Span("Hurst", className="hurst-toolbar__title"),
+        html.Span(msg, className=cls),
+    ])
+
+
+def hurst_figure(series, trend=None) -> go.Figure:
+    valid = series.dropna() if series is not None else pd.Series(dtype=float)
+    fig = go.Figure()
+    if valid.empty:
+        return empty_fig("Nema Hurst serije")
+    fig.add_trace(go.Scatter(
+        x=valid.index, y=valid.values, mode="lines",
+        line=dict(color="#42a5f5", width=2),
+        name="Hurst", hovertemplate="H = %{y:.3f}<extra></extra>",
+    ))
+    if trend is not None:
+        t = trend.reindex(valid.index).dropna()
+        if not t.empty:
+            fig.add_trace(go.Scatter(
+                x=t.index, y=t.values, mode="lines",
+                line=dict(color=RED, width=1.5, dash="dash"),
+                name="Trend", hoverinfo="skip",
+            ))
+    fig.add_hline(y=0.5, line=dict(color="#808191", width=1, dash="dot"))
+    fig.add_hrect(y0=0, y1=0.45, fillcolor="rgba(197,255,74,0.08)", line_width=0)
+    fig.add_hrect(y0=0.55, y1=1, fillcolor="rgba(255,200,87,0.10)", line_width=0)
+    fig.update_layout(
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=28, r=4, t=2, b=16), height=56, showlegend=False,
+        yaxis=dict(range=[0, 1], gridcolor=CHART_GRID, tickfont=dict(size=10),
+                   zeroline=False, fixedrange=True),
+        xaxis=dict(gridcolor=CHART_GRID, tickfont=dict(size=10), showgrid=False,
+                   tickformat="%d.%m. %H:%M", fixedrange=True),
+    )
+    return fig
+
+
+def hurst_widget(summary: dict | None, series=None, trend=None):
+    if not summary:
+        return hurst_placeholder()
+    tone = HURST_TONE.get(summary.get("code"), "text-muted")
+    tip = f"{summary['label']} · {summary['strategy']}"
+    return html.Div(
+        className="hurst-toolbar",
+        title=tip,
+        children=[
+            html.Span("Hurst", className="hurst-toolbar__title"),
+            html.Span(f"{summary['hurst']:.3f}", className=f"hurst-toolbar__value {tone}"),
+            html.Span(summary["code"], className=f"badge {tone}"),
+            html.Span(f"w{summary['window']}", className="badge text-muted"),
+            *([html.Span(summary["tf"], className="badge text-muted")] if summary.get("tf") else []),
+            dcc.Graph(
+                figure=hurst_figure(series, trend),
+                config={"displayModeBar": False, "responsive": True},
+                className="hurst-toolbar__spark",
+            ),
+        ],
+    )
 
 
 def trend_badges(trend, atr_map=None, tf="5min"):
@@ -582,6 +692,21 @@ app.layout = html.Div(
                                       {"label": "Sesije (x-os)", "value": "sessions"},
                                       {"label": "Trejdovi", "value": "trades"},
                                   ]),
+                    html.Div(className="toolbar__group toolbar__group--indicators", children=[
+                        html.Span("Indikatori", className="toolbar__label"),
+                        dcc.Checklist(
+                            id="indicators",
+                            value=[],
+                            labelStyle=ITEM,
+                            options=[
+                                {"label": f"BB ({BB_PERIOD})", "value": "bb"},
+                                {"label": "SMA 50", "value": "sma50"},
+                                {"label": "EMA 10", "value": "ema10"},
+                                {"label": "EMA 20", "value": "ema20"},
+                            ],
+                        ),
+                    ]),
+                    html.Div(id="hurst-widget", children=hurst_placeholder("Učitaj")),
                     html.Button("Novi trejd", id="new-trade-btn", n_clicks=0, className="btn btn--primary"),
                     dcc.Input(id="txt", type="text", placeholder="tekst bilješke", className="input input--wide"),
                     html.Button("Dodaj tekst", id="add_txt", className="btn btn--secondary"),
@@ -983,20 +1108,45 @@ def reload_market(_, ticker, days):
     Output("chart", "figure"),
     Output("trend-badges", "children"),
     Input("market-store", "data"),
-    Input("tf", "value"), Input("layers", "value"),
+    Input("tf", "value"), Input("layers", "value"), Input("indicators", "value"),
     Input("trades-store", "data"),
     State("store", "data"),
 )
-def update_chart(meta, tf, layers, trades, store):
+def update_chart(meta, tf, layers, indicators, trades, store):
     if not meta or meta.get("status") == "idle" or MARKET is None:
         return empty_fig(), html.Span("—", className="text-muted")
     if meta.get("status") == "error":
         return empty_fig(meta.get("msg", "Greška")), html.Span(meta.get("msg", "Greška"), className="text-negative")
     tf = tf or "5min"
+    overlay = list(layers or []) + list(indicators or [])
     return (
-        build_fig(MARKET, tf, layers or [], store or {}, trades or []),
+        build_fig(MARKET, tf, overlay, store or {}, trades or []),
         trend_badges(MARKET["trend"], MARKET.get("atr"), tf),
     )
+
+
+@app.callback(
+    Output("hurst-widget", "children"),
+    Input("market-store", "data"),
+    Input("tf", "value"),
+)
+def update_hurst(meta, tf):
+    if not meta or meta.get("status") == "idle" or MARKET is None:
+        return hurst_placeholder()
+    if meta.get("status") == "error":
+        return hurst_placeholder(meta.get("msg", "Greška"), "text-negative")
+    tf = tf or "5min"
+    used_tf = tf
+    df = MARKET["data"].get(tf, MARKET["df5"])
+    if df is None or len(df) <= HURST_MIN_BARS:
+        used_tf = "5min"
+        df = MARKET["df5"]
+    try:
+        summary, series, trend = analyze_ohlc(df)
+        summary["tf"] = used_tf
+        return hurst_widget(summary, series, trend)
+    except Exception as e:
+        return hurst_placeholder(str(e), "text-negative")
 
 
 def _atr_suggest(tf: str) -> tuple[int, int, str]:

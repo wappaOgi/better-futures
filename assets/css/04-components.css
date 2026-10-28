@@ -256,3 +256,44 @@ input:disabled {
 .empty-state {
   color: var(--color-text-muted);
 }
+
+/* Hurst toolbar chip (Graf tab) */
+.hurst-toolbar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm) var(--space-md);
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-input);
+  max-width: 100%;
+}
+
+.hurst-toolbar__title {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hurst-toolbar__value {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.hurst-toolbar__spark {
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: 220px;
+  height: 56px;
+}
+
+.toolbar__group--indicators {
+  flex-wrap: wrap;
+  align-items: center;
+  max-width: 100%;
+}

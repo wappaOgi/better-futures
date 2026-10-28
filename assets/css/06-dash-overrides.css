@@ -246,3 +246,10 @@
 .chart-wrap .plot-container {
   height: 100% !important;
 }
+
+.hurst-toolbar .dash-graph,
+.hurst-toolbar .js-plotly-plot,
+.hurst-toolbar .plot-container,
+.hurst-toolbar__spark .js-plotly-plot {
+  height: 56px !important;
+}

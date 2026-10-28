@@ -33,6 +33,19 @@
   padding: var(--space-sm) 0;
 }
 
+.chart-row {
+  display: flex;
+  gap: var(--space-md);
+  align-items: stretch;
+  height: 78vh;
+}
+
+.chart-row .chart-wrap {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
 .chart-wrap {
   position: relative;
   height: 78vh;
