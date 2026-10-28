@@ -32,7 +32,15 @@ from market_movers import (
 )
 from fundamentals import analyze_fundamentals, fetch_ticker_news
 from algo.hurst import MIN_SERIES as HURST_MIN_BARS, analyze_ohlc
-from indicators import BB_PERIOD, BB_STD, bollinger, ema, sma
+from indicators import (
+    BB_PERIOD,
+    BB_STD,
+    bollinger,
+    ema,
+    hammer_bb_circle_shapes,
+    hammers_at_bollinger,
+    sma,
+)
 
 GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
 CHART_BG, CHART_GRID = "#0b0d0e", "#2a2d31"
@@ -103,6 +111,7 @@ def build_fig(market, tf, layers, store, trades):
 
     active = set(layers or [])
     close = df["Close"]
+    hammer_shapes = []
     if "bb" in active:
         bb = bollinger(close, BB_PERIOD, BB_STD)
         fig.add_trace(go.Scatter(
@@ -121,6 +130,13 @@ def build_fig(market, tf, layers, store, trades):
             line=dict(color="rgba(186,104,200,0.45)", width=1, dash="dot"),
             hovertemplate=f"BB mid: %{{y:.2f}}<extra></extra>", showlegend=False,
         ))
+        hammer_hits = hammers_at_bollinger(df, bb)
+        if len(hammer_hits):
+            if len(x) >= 2:
+                bar_half_ms = pd.Series(x).diff().dropna().median().total_seconds() * 500
+            else:
+                bar_half_ms = 150_000
+            hammer_shapes = hammer_bb_circle_shapes(df, hammer_hits, bar_half_ms)
     if "sma50" in active:
         fig.add_trace(go.Scatter(
             x=x, y=sma(close, 50), mode="lines",
@@ -221,7 +237,7 @@ def build_fig(market, tf, layers, store, trades):
         yaxis=yaxis,
         **layout_extra,
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
-        shapes=tl_shapes + sess_shapes + trend_shapes + trade_shapes + [price_line] + store.get("shapes", []),
+        shapes=tl_shapes + sess_shapes + trend_shapes + trade_shapes + hammer_shapes + [price_line] + store.get("shapes", []),
         annotations=tl_ann + sess_ann + trend_ann + trade_ann + [price_ann] + store.get("annotations", []),
     )
     return fig
