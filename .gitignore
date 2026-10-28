@@ -6,3 +6,4 @@ trades.json
 bank.json
 market_movers.json
 .DS_Store
+openrouter.env
