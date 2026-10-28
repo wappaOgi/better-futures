@@ -40,6 +40,7 @@ from indicators import (
     hammer_bb_circle_shapes,
     hammers_at_bollinger,
     sma,
+    volume_profile,
 )
 
 GREEN, RED, AMBER = "#c5ff4a", "#ff5c5c", "#ffc857"
@@ -156,6 +157,57 @@ def build_fig(market, tf, layers, store, trades):
             hovertemplate="EMA20: %{y:.2f}<extra></extra>", showlegend=False,
         ))
 
+    vp_shapes = []
+    if "vp" in active:
+        prof = volume_profile(df)
+        if prof is not None:
+            peak = float(prof["total"].max())
+            prices = prof["price"].to_numpy()
+            step = float(prices[1] - prices[0]) if len(prices) > 1 else max(peak, 1.0)
+            sell = prof["sell"].to_numpy()
+            buy = prof["buy"].to_numpy()
+            total = prof["total"].to_numpy()
+            hover = list(zip(prices.tolist(), buy.tolist(), sell.tolist(), total.tolist()))
+            bar_w = step * 0.92
+            fig.add_trace(go.Bar(
+                x=-sell, y=prices, orientation="h",
+                xaxis="x2", yaxis="y", width=bar_w,
+                marker=dict(color="rgba(230,179,37,0.88)", line=dict(width=0)),
+                customdata=hover,
+                hovertemplate=(
+                    "Cijena %{customdata[0]:.2f}<br>Sell %{customdata[2]:.0f}"
+                    "<br>Ukupno %{customdata[3]:.0f}<extra></extra>"
+                ),
+                showlegend=False, name="VP sell",
+            ))
+            fig.add_trace(go.Bar(
+                x=-buy, y=prices, orientation="h", base=-sell,
+                xaxis="x2", yaxis="y", width=bar_w,
+                marker=dict(color="rgba(47,111,237,0.88)", line=dict(width=0)),
+                customdata=hover,
+                hovertemplate=(
+                    "Cijena %{customdata[0]:.2f}<br>Buy %{customdata[1]:.0f}"
+                    "<br>Sell %{customdata[2]:.0f}<br>Ukupno %{customdata[3]:.0f}<extra></extra>"
+                ),
+                showlegend=False, name="VP buy",
+            ))
+            poc = float(prof.loc[prof["poc"], "price"].iloc[0])
+            vp_shapes.append(dict(
+                type="line", xref="paper", yref="y", x0=0, x1=1,
+                y0=poc, y1=poc, layer="above",
+                line=dict(color="rgba(230,179,37,0.7)", width=1, dash="dot"),
+            ))
+            layout_vp = dict(
+                overlaying="x", anchor="y", side="top",
+                range=[-peak / 0.34, 0],
+                showgrid=False, showticklabels=False, ticks="",
+                showline=False, zeroline=False, fixedrange=True,
+            )
+        else:
+            layout_vp = None
+    else:
+        layout_vp = None
+
     if "zones" in active:
         for z in zones.itertuples():
             col = {"support": GREEN, "resistance": RED}.get(z.kind, AMBER)
@@ -219,6 +271,9 @@ def build_fig(market, tf, layers, store, trades):
     yaxis = dict(side="right", fixedrange=False, gridcolor=CHART_GRID,
                  tickformat=".2f", showexponent="none")
     layout_extra = {}
+    if layout_vp is not None:
+        layout_extra["xaxis2"] = layout_vp
+        layout_extra["barmode"] = "overlay"
     if len(atr_s) >= 2:
         yaxis["domain"] = [0.22, 1.0]
         layout_extra["yaxis2"] = dict(
@@ -237,7 +292,7 @@ def build_fig(market, tf, layers, store, trades):
         yaxis=yaxis,
         **layout_extra,
         newshape=dict(line=dict(color="#ffeb3b", width=2)),
-        shapes=tl_shapes + sess_shapes + trend_shapes + trade_shapes + hammer_shapes + [price_line] + store.get("shapes", []),
+        shapes=tl_shapes + sess_shapes + trend_shapes + trade_shapes + hammer_shapes + vp_shapes + [price_line] + store.get("shapes", []),
         annotations=tl_ann + sess_ann + trend_ann + trade_ann + [price_ann] + store.get("annotations", []),
     )
     return fig
@@ -719,6 +774,7 @@ app.layout = html.Div(
                                 {"label": "SMA 50", "value": "sma50"},
                                 {"label": "EMA 10", "value": "ema10"},
                                 {"label": "EMA 20", "value": "ema20"},
+                                {"label": "Volume profile", "value": "vp"},
                             ],
                         ),
                     ]),

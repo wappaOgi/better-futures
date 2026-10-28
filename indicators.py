@@ -65,6 +65,57 @@ def sma(close: pd.Series, period: int = SMA_TREND) -> pd.Series:
     return close.rolling(period, min_periods=period).mean().rename(f"sma_{period}")
 
 
+def volume_profile(df: pd.DataFrame, bins: int = 48) -> pd.DataFrame | None:
+    """Volumen po cjenovnim razinama. Buy = close>=open, sell = ostalo, ravnomjerno kroz high-low."""
+    if df is None or df.empty or "Volume" not in df.columns:
+        return None
+    vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0).to_numpy(dtype=float)
+    if not np.isfinite(vol).any() or float(np.nansum(vol)) <= 0:
+        return None
+    high = df["High"].to_numpy(dtype=float)
+    low = df["Low"].to_numpy(dtype=float)
+    op = df["Open"].to_numpy(dtype=float)
+    cl = df["Close"].to_numpy(dtype=float)
+    pmin = float(np.nanmin(low))
+    pmax = float(np.nanmax(high))
+    if not np.isfinite(pmin) or not np.isfinite(pmax) or pmax <= pmin:
+        return None
+
+    bins = max(12, int(bins))
+    edges = np.linspace(pmin, pmax, bins + 1)
+    buy = np.zeros(bins)
+    sell = np.zeros(bins)
+    for i in range(len(vol)):
+        v = vol[i]
+        lo, hi = low[i], high[i]
+        if v <= 0 or not np.isfinite(lo) or not np.isfinite(hi):
+            continue
+        if hi < lo:
+            lo, hi = hi, lo
+        i0 = int(np.clip(np.searchsorted(edges, lo, side="right") - 1, 0, bins - 1))
+        i1 = int(np.clip(np.searchsorted(edges, hi, side="right") - 1, 0, bins - 1))
+        if i1 < i0:
+            i0, i1 = i1, i0
+        share = v / (i1 - i0 + 1)
+        if cl[i] >= op[i]:
+            buy[i0 : i1 + 1] += share
+        else:
+            sell[i0 : i1 + 1] += share
+
+    total = buy + sell
+    if float(total.max()) <= 0:
+        return None
+    return pd.DataFrame(
+        {
+            "price": (edges[:-1] + edges[1:]) / 2,
+            "buy": buy,
+            "sell": sell,
+            "total": total,
+            "poc": np.arange(bins) == int(np.argmax(total)),
+        }
+    )
+
+
 def hammers_at_bollinger(
     df: pd.DataFrame,
     bb: pd.DataFrame,
