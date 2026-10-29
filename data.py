@@ -25,12 +25,19 @@ def _to_zagreb(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_5m(ticker: str, period: str) -> pd.DataFrame:
-    df = yf.download(ticker, interval="5m", period=period, progress=False, multi_level_index=False)
-    if df.empty:
+    """5m OHLCV uključujući pre/post market, do zadnjeg bara koji Yahoo vrati."""
+    df = yf.Ticker(ticker).history(
+        interval="5m",
+        period=period,
+        prepost=True,
+        auto_adjust=True,
+    )
+    if df is None or df.empty:
         raise RuntimeError(f"yfinance nije vratio podatke za {ticker}")
+    df = df[[c for c in OHLCV if c in df.columns]].copy()
     df = _to_zagreb(df)
     df.index.name = "Time"
-    return df[list(OHLCV)].dropna()
+    return df.dropna(subset=["Open", "High", "Low", "Close"])
 
 
 def load_5m(ticker: str = DEFAULT_TICKER, days: int = 5) -> pd.DataFrame:
